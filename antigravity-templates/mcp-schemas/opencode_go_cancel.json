@@ -1,0 +1,1 @@
+{"name":"opencode_go_cancel","description":"中断当前 Antigravity Project 内指定 Worker。仅在用户要求终止或有正当理由时调用。","parameters":{"additionalProperties":false,"properties":{"job_id":{"type":"string"},"project_root":{"type":"string"}},"required":["project_root","job_id"],"type":"object"}}

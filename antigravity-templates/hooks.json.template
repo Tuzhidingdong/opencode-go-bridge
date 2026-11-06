@@ -1,0 +1,41 @@
+{
+  "antigravity-token-meter": {
+    "enabled": true,
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "cmd.exe /d /c {{BRIDGE_DIR}}\\token_meter_session_start.cmd",
+        "timeout": 20
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "cmd.exe /d /c {{BRIDGE_DIR}}\\token_meter_stop.cmd",
+        "timeout": 40
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "cmd.exe /d /c {{BRIDGE_DIR}}\\token_meter_pre_invocation.cmd",
+        "timeout": 20
+      }
+    ]
+  },
+  "opencode-go-project-router": {
+    "enabled": true,
+    "PreToolUse": [
+      {
+        "matcher": "call_mcp_tool",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd.exe /d /c {{BRIDGE_DIR}}\\antigravity_opencode_project_router.cmd",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

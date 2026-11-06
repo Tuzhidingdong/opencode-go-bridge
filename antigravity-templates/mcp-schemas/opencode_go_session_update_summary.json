@@ -1,0 +1,1 @@
+{"name":"opencode_go_session_update_summary","description":"持久化记录指定 Worker Slot 的结构化研究摘要、证据出处与核心结论，供后续任务或 Session 迁移时继承。必须传入 project_root。","parameters":null}

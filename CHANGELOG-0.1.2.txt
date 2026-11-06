@@ -1,0 +1,9 @@
+OpenCode Go Worker Manager 0.1.2
+
+Fixes based on the first Windows installation/probe:
+1. The first probe returned the OpenCode web-app HTML from GET /global/health but incorrectly marked it healthy. V2 startup now checks GET /api/info and rejects any non-JSON/non-object response.
+2. Model inspection now discovers project Agent IDs; Worker start is blocked before Session creation if the required Agent (build/explore) is missing.
+3. SQLite connections now close explicitly after each transaction. This fixes Windows PermissionError during TemporaryDirectory cleanup seen after the 0.1.1 test run.
+4. Tests cover HTML health-response rejection and required Agent discovery.
+
+This release does not change global Antigravity MCP configuration, Token Meter files, or any Project files.

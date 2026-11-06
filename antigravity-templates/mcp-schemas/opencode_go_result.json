@@ -1,0 +1,1 @@
+{"name":"opencode_go_result","description":"获取当前 Antigravity Project 内指定 Worker 的完整 assistant 回复、各条 assistant message 的模型/Token/费用，以及当前状态。必须传入当前 Project 根目录，防止跨项目访问。","parameters":{"additionalProperties":false,"properties":{"job_id":{"type":"string"},"project_root":{"type":"string"}},"required":["project_root","job_id"],"type":"object"}}

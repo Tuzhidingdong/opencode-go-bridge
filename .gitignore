@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local databases and logs
+*.sqlite3
+*.log
+*.zip
+
+# Backup files & scrap scripts
+*.bak*
+*.2026*
+backups_v2/
+dev_v2_*.py
+_worker-manager-package-*/
+apply_core_part2.py
+
+# OS generated
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store

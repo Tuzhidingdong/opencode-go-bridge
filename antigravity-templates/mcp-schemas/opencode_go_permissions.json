@@ -1,0 +1,1 @@
+{"name":"opencode_go_permissions","description":"查询当前 Antigravity Project 内某个 Worker 的待处理权限请求。Antigravity 应展示动作和资源，再根据用户明确决定回应。","parameters":{"additionalProperties":false,"properties":{"job_id":{"type":"string"},"project_root":{"type":"string"}},"required":["project_root","job_id"],"type":"object"}}

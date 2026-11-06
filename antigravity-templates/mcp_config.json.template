@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "opencode-go-worker-manager": {
+      "command": "{{PYTHON_EXECUTABLE}}",
+      "args": [
+        "-X",
+        "utf8",
+        "{{BRIDGE_DIR}}\\opencode_go_worker_mcp.py"
+      ],
+      "cwd": "{{BRIDGE_DIR}}"
+    }
+  }
+}
