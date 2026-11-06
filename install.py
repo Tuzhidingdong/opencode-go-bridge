@@ -130,7 +130,45 @@ def install():
                 count += 1
         log_ok(f"Copied {count} MCP schema files & instructions -> {mcp_dir}")
 
-    # 6. Verification
+    # 6. Auto-configure OpenCode Auth if key file is found
+    key_candidates = [
+        Path(r"E:\AI_Confinguration\API\Opencode_api.txt"),
+        home_dir / "Opencode_api.txt",
+        bridge_dir / "Opencode_api.txt",
+    ]
+    api_key = None
+    for cand in key_candidates:
+        if cand.exists():
+            try:
+                raw_k = cand.read_text(encoding="utf-8").strip()
+                if raw_k:
+                    api_key = raw_k
+                    log_ok(f"Found OpenCode API key from {cand}")
+                    break
+            except Exception as e:
+                log_err(f"Failed to read key from {cand}: {e}")
+
+    if api_key:
+        opencode_auth_dir = home_dir / ".local" / "share" / "opencode"
+        opencode_auth_dir.mkdir(parents=True, exist_ok=True)
+        auth_file = opencode_auth_dir / "auth.json"
+        auth_payload = {
+            "opencode": {
+                "type": "api",
+                "key": api_key
+            },
+            "opencode-go": {
+                "type": "api",
+                "key": api_key
+            }
+        }
+        with open(auth_file, "w", encoding="utf-8") as f:
+            json.dump(auth_payload, f, indent=2)
+        log_ok(f"Configured OpenCode auth -> {auth_file}")
+    else:
+        log("No local Opencode_api.txt found; skipping OpenCode auth injection.")
+
+    # 7. Verification
     print("-" * 70)
     log("Running self-check tests to verify installation integrity...")
     try:
