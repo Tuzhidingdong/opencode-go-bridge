@@ -135,3 +135,27 @@ Worker 任务完成后，Supervisor 报告要素：
   - `SUBMISSION_UNKNOWN`: Strict idempotent barrier. Never submit a duplicate prompt to the same session until the existing job status is verified.
 - **Benchmark Manifest**:
   - Benchmarks must record and bind immutable Manifest metadata (`prompt_sha256`, `input_sha256`, `model_id`, `role`, `session_strategy`) via `benchmark_manifest` to enable verifiable 100% replay without searching transcripts.
+
+
+---
+
+## Autonomous Debugging & Retry Circuit Breaker (自主调试与重试熔断协议)
+
+### 1. The 3-Strike Circuit Breaker (三击硬熔断铁律)
+- **连续试错上限**：针对同类错误或同一个局部技术阻塞（如包安装失败、环境缺失、API鉴权失败、语法/导入报错、端口占用、参数校验不通过等），**连续自主尝试修复不得超过 3 次**（或连续排错工具调用步数不得超过 5 步）。
+- **立即强制刹车**：一旦第 3 次尝试依然未能根本解决问题，**严禁继续调用任何工具进行自主试错**，必须立即退出工具循环，直接向用户输出汇报。
+- **标准化“现场止血报告”**：触发熔断停下后，必须直接输出精炼汇报（≤ 200 字），内容包含：
+  1. **核心受阻现象**：最原始且关键的错误堆栈摘要（禁止贴大段重复日志）；
+  2. **已尝试路径**：简述已执行的 1~3 种方案及各自失败原因；
+  3. **阻断根因分析**：推测最可能的底层阻碍（如缺少本地凭据、权限限制、网络阻断）；
+  4. **决策选项**：给出 2~3 个需要人工裁决的方向，等待用户明确指令。
+
+### 2. Prohibited Anti-Patterns (四条绝对反循环红线)
+1. **严禁“死循环复读”**：若上一步返回的错误与当前步骤完全一致，严禁在未引入全新变量的情况下重复调用相同或微调参数的命令。
+2. **严禁“衍生排错链扩散”（>2 层）**：排错过程中若为了解决问题 A 引入新报错 B，解决 B 又引入 C，嵌套深度达到 2 层时必须立即停下，禁止继续深挖。
+3. **严禁“高位上下文盲目发散”**：当会话历史已较长（感知到回复延迟变高或工具步骤累积）时，严禁漫无目的地进行大范围递归扫描（如全局 `Get-ChildItem -Recurse`）或多文件盲目修改。
+4. **脏环境防扩散**：在排错试探过程中若临时创建了测试脚本、修改了配置文件，若未能奏效，必须在向用户汇报时明确说明或主动复原，严禁污染工作区。
+
+### 3. Context Health & Proactive Escalation (上下文健康度守护)
+- **长任务早熔断**：在排错阶段，如果发现单点排查已耗费超过 5 轮多步骤工具调用且未见收敛趋势，即使未满 3 次失败，也应主动暂停并向用户确认：“*当前排查路径可能产生较高上下文消耗，是否继续或新开会话排查？*”
+- **建议压缩与隔离**：排错一旦耗费了大量篇幅，在彻底解决问题后，应主动建议用户执行 `/compact` 或在新会话中继续推进主干业务，避免后续业务带着昂贵的调试残骸滚动重放。
