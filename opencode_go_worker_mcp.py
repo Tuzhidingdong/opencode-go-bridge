@@ -256,7 +256,7 @@ TOOLS: list[dict[str, Any]] = [
                 "project_root": {"type": "string"},
                 "job_id": {"type": "string"},
                 "request_id": {"type": "string"},
-                "request_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "maxItems": 10, "uniqueItems": true},
+                "request_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "maxItems": 10, "uniqueItems": True},
                 "decision": {"type": "string", "enum": ["once", "reject"]},
                 "message": {"type": "string"}
             },
