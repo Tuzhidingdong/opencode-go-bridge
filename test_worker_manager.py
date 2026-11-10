@@ -45,8 +45,6 @@ class FakeClient(core.OpenCodeClient):
             ]}
         if path == "/api/session/active":
             return {"data": {}}
-        if method == "PATCH" and path.startswith("/api/session/"):
-            return {"data": {}}
         if path == "/api/session":
             return {"data": {"id": f"ses_{uuid.uuid4().hex[:12]}"}}
         if path.endswith("/prompt"):
@@ -136,45 +134,36 @@ class WorkerManagerTests(unittest.TestCase):
         self.assertTrue(any(r["action"] == "edit" and r["effect"] == "allow" for r in rules))
         self.assertTrue(any(r["action"] == "shell" and r["effect"] == "ask" for r in rules))
 
-    def test_task_authorization_is_exact_and_user_approved(self):
-        command = "python -m unittest tests.test_smoke"
-        result = self.client.start_worker(
-            raw_root=self.root,
-            role="writer",
-            task="Run the approved test command.",
-            model_id="mimo-v2.6-flash",
-            task_authorization={"approved_by_user": True, "approved_shell_commands": [command]},
-        )
-        create_call = next(call for call in self.client.calls if call[1] == "/api/session")
-        rules = create_call[2]["permissions"]
-        self.assertIn({"action": "shell", "resource": command, "effect": "allow"}, rules)
-        self.assertIn({"action": "shell", "resource": "*", "effect": "ask"}, rules)
-        stored_scope = json.loads(self.client.store.get(result["job_id"])["permission_scope_json"])
-        self.assertEqual(stored_scope["state"], "active")
-        self.assertEqual(stored_scope["approved_shell_commands"], [command])
-
-    def test_task_authorization_rejects_false_approval_wildcards_and_read_only_roles(self):
-        base = {
-            "raw_root": self.root,
+    def test_batch_permission_reply_uses_one_manager_call_for_multiple_once_approvals(self):
+        job_id = "job_permission_batch"
+        session_id = "ses_permission_batch"
+        self.client.store.add({
+            "job_id": job_id,
+            "session_id": session_id,
+            "project_root": self.root,
             "role": "writer",
-            "task": "Run one command.",
             "model_id": "mimo-v2.6-flash",
-        }
+            "title": "Permission batch test",
+        })
+        result = self.client.reply_permission(
+            job_id=job_id,
+            raw_root=self.root,
+            request_ids=["perm_a", "perm_b", "perm_c"],
+            decision="once",
+        )
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(result["replied_request_ids"], ["perm_a", "perm_b", "perm_c"])
+        calls = [call for call in self.client.calls if "/permission/" in call[1] and call[1].endswith("/reply")]
+        self.assertEqual(len(calls), 3)
+
+    def test_batch_permission_reject_is_limited_to_one_request(self):
         with self.assertRaises(core.BridgeError):
-            self.client.start_worker(**base, task_authorization={
-                "approved_by_user": False,
-                "approved_shell_commands": ["python -m unittest"],
-            })
-        with self.assertRaises(core.BridgeError):
-            self.client.start_worker(**base, task_authorization={
-                "approved_by_user": True,
-                "approved_shell_commands": ["python *"],
-            })
-        with self.assertRaises(core.BridgeError):
-            self.client.start_worker(**{**base, "role": "analyst"}, task_authorization={
-                "approved_by_user": True,
-                "approved_shell_commands": ["python -m unittest"],
-            })
+            self.client.reply_permission(
+                job_id="missing",
+                raw_root=self.root,
+                request_ids=["perm_a", "perm_b"],
+                decision="reject",
+            )
 
     def test_non_go_model_rejected(self):
         with self.assertRaises(core.BridgeError):
@@ -194,6 +183,9 @@ class WorkerManagerTests(unittest.TestCase):
             "opencode_go_permission_reply", "opencode_go_cancel",
         }
         self.assertTrue(expected.issubset(names))
+        permission_tool = next(tool for tool in mcp.TOOLS if tool["name"] == "opencode_go_permission_reply")
+        self.assertIn("request_ids", permission_tool["inputSchema"]["properties"])
+        self.assertIn("oneOf", permission_tool["inputSchema"])
         for tool in mcp.TOOLS:
             if tool["name"] in {
                 "opencode_go_status", "opencode_go_result", "opencode_go_list_jobs",

@@ -36,12 +36,11 @@ Before invoking any Worker, the Supervisor must first evaluate:
 ### 2.3 Model Selection and Inspection (模型选择、检查与直投)
 
 #### 零嗅探直投模式 (Direct Dispatch Mode) —— 通信税优化核心
-- **已知模型与角色时直投**：若用户或上下文已明确指定并确认 `role` 与 `model`，Supervisor **不调用前置 `opencode_go_inspect`**，直接通过自适应路由决策调用 `opencode_go_start`。Manager 会在 start 内部验证模型仍处于可用状态。
+- **已知模型与角色时直投**：若用户或上下文已明确指定并确认 `role` 与 `model`，Supervisor 不调用前置 `opencode_go_inspect`；Manager 会在 `opencode_go_start` 内部验证模型当前是否可用。
 - **按需嗅探模式 (On-Demand Inspect)**：仅在以下情况调用 `opencode_go_inspect`：
   1. 用户明确要求“查询可用模型”或“查看配额状态”；
   2. 当前上下文没有用户已确认的可用模型，且需要提供模型候选；
   3. 发生模型不可用、网络或参数异常，需要有针对性地诊断。
-- **启动工具内部会验证 model_id 是否仍可用**。已知并经用户确认的 Role/Model 不要为了满足形式流程再重复 inspect。
 
 向用户结构化展示时（仅限按需嗅探）：
 1. **当前 Project**：实际工作区根路径。
@@ -82,7 +81,7 @@ Before invoking any Worker, the Supervisor must first evaluate:
 
 Runtime status/result sequence:
 - **一次等待直接取结果**：默认调用 `opencode_go_wait_result(project_root, job_id, timeout_seconds=300, output_mode="summary")`。Worker 完成时它已经返回终态结果和完整 token 汇总，不要再无条件调用 `opencode_go_result`。
-- 若返回 `waiting_for_permission`，向用户展示精确 action/resource，取得明确决定后调用 `opencode_go_permission_reply(decision="once"|"reject")`，再调用一次 wait_result 继续等待。
+- 若返回 `waiting_for_permission`，向用户展示每一项精确 action/resource，取得逐项明确批准后，可通过一次 `opencode_go_permission_reply(request_ids=[...], decision="once")` 回复多个已批准请求；不得包含未展示或未批准的请求。拒绝操作仍应单独指定一个 request_id。
 - 若返回 `timeout_expired`，再次 wait_result；不要重新提交相同任务，不要循环调用 status。
 - 只有用户要求完整对话或摘要提示内容被截断且确有必要时，才调用 `opencode_go_result(output_mode="full")`。
 
@@ -114,8 +113,6 @@ Worker 任务完成后，Supervisor 报告要素：
 - Reviewer/Analyst cannot run Shell.
 - Writer/Reviser Shell commands require one-time approval (`once` only). Never grant permanent `always` approval.
 - Before approving a permission request, show the exact action/resources and obtain the user's explicit approval. Never approve a command that references paths outside the current Project root.
-- For a short, known command sequence, the Supervisor may offer task-scoped exact Shell authorization: show each complete command/resource string and obtain explicit approval for each before starting the Worker; pass `task_authorization={"approved_by_user":true,"approved_shell_commands":[...]}` only after that approval. No wildcards or command prefixes are allowed. All unlisted commands remain `ask`; the temporary session rules are reset to the role baseline when the terminal result is retrieved.
-- Task-scoped authorization is optional and only for `writer`, `reviser`, or `general`. Never use it for `reviewer` or `analyst`, and never infer the user's approval from a general request to “continue”.
 - Avoid two workers editing the same file simultaneously. Shared inputs may be read, but worker outputs should be separate files.
 
 ## 5. Token Accounting and Queries

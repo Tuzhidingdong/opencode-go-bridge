@@ -77,12 +77,6 @@ class MockLifecycleClient(core.OpenCodeClient):
             self.session_messages_map[sid] = []
             self.session_permissions_map[sid] = []
             return {"data": {"id": sid}}
-        if method == "PATCH" and path.startswith("/api/session/"):
-            parts = path.split("/")
-            sid = parts[3]
-            if isinstance(body, dict) and "permissions" in body:
-                self.session_permissions_map[sid] = body["permissions"]
-            return {"data": {}}
         if "/prompt" in path:
             if self.next_prompt_error:
                 err = self.next_prompt_error
@@ -128,13 +122,9 @@ class WorkerLifecycleTests(unittest.TestCase):
     def test_01_normal_completion(self):
         res = self.client.start_worker(
             raw_root=self.root,
-            role="writer",
-            task="Run the approved test and report the result.",
+            role="analyst",
+            task="Analyze data files",
             model_id="mimo-v2.6-flash",
-            task_authorization={
-                "approved_by_user": True,
-                "approved_shell_commands": ["python -m unittest tests.test_smoke"],
-            },
         )
         job_id = res["job_id"]
         sid = res["session_id"]
@@ -168,17 +158,39 @@ class WorkerLifecycleTests(unittest.TestCase):
         self.assertEqual(final["usage_total_observed"]["input"], 150)
         self.assertEqual(final["usage_total_observed"]["output"], 80)
         self.assertEqual(final["usage_total_observed"]["reasoning"], 10)
-        self.assertEqual(final["permission_scope_cleanup"]["state"], "cleared")
-        cleared_scope = json.loads(self.client.store.get(job_id)["permission_scope_json"])
-        self.assertEqual(cleared_scope["state"], "cleared")
-        self.assertIn(
-            {"action": "shell", "resource": "*", "effect": "ask"},
-            self.client.session_permissions_map[sid],
+
+    def test_01b_compact_result_preserves_full_result_cache(self):
+        res = self.client.start_worker(
+            raw_root=self.root,
+            role="analyst",
+            task="Return two assistant messages for compact/full result test.",
+            model_id="mimo-v2.6-flash",
         )
-        self.assertNotIn(
-            {"action": "shell", "resource": "python -m unittest tests.test_smoke", "effect": "allow"},
-            self.client.session_permissions_map[sid],
-        )
+        job_id = res["job_id"]
+        sid = res["session_id"]
+        self.client.session_messages_map[sid] = [
+            {
+                "info": {"id": "msg_1", "role": "assistant", "finish": "tool-calls", "tokens": {"input": 100, "output": 10}, "cost": 0},
+                "parts": [{"type": "text", "text": "Intermediate note"}],
+            },
+            {
+                "info": {"id": "msg_2", "role": "assistant", "finish": "completed", "tokens": {"input": 120, "output": 20, "reasoning": 5, "cache": {"read": 30, "write": 0}}, "cost": 0.001},
+                "parts": [{"type": "text", "text": "Final verified result"}],
+            },
+        ]
+        self.client.active_sessions.pop(sid, None)
+
+        compact = self.client.job_result(job_id, self.root, output_mode="summary")
+        self.assertEqual(compact["assistant_message_count"], 2)
+        self.assertEqual(compact["omitted_assistant_messages"], 1)
+        self.assertEqual(len(compact["messages"]), 1)
+        self.assertEqual(compact["messages"][0]["text"], "Final verified result")
+        self.assertEqual(compact["usage_total_observed"]["input"], 220)
+
+        full = self.client.job_result(job_id, self.root, output_mode="full")
+        self.assertEqual(len(full["messages"]), 2)
+        self.assertEqual(full["messages"][0]["text"], "Intermediate note")
+        self.assertEqual(full["output_mode"], "full")
 
     # 测试 2：模型请求失败 (Model request failure / auth expired)
     def test_02_model_request_failure(self):

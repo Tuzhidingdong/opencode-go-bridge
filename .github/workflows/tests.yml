@@ -1,0 +1,34 @@
+name: Worker Manager tests
+
+on:
+  push:
+    branches: ["main", "upgrade/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: worker-manager-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: Python ${{ matrix.python-version }} on Windows
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Compile Python modules
+        run: python -m compileall -q .
+      - name: Run unit tests
+        run: python -m unittest discover -s . -p "test_*.py" -v

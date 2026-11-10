@@ -727,15 +727,9 @@ class JobStore:
                     job_id TEXT PRIMARY KEY,
                     server_pid INTEGER,
                     server_start_time REAL,
-                    terminal_result TEXT,
-                    permission_scope_json TEXT
+                    terminal_result TEXT
                 )"""
             )
-            job_process_columns = {
-                row[1] for row in con.execute("PRAGMA table_info(job_process)").fetchall()
-            }
-            if "permission_scope_json" not in job_process_columns:
-                con.execute("ALTER TABLE job_process ADD COLUMN permission_scope_json TEXT")
             con.execute(
                 """CREATE TABLE IF NOT EXISTS worker_slots (
                     project_root TEXT NOT NULL,
@@ -821,28 +815,19 @@ class JobStore:
                 ),
             )
             con.execute(
-                "INSERT OR REPLACE INTO job_process(job_id, server_pid, server_start_time, terminal_result, permission_scope_json) VALUES(?,?,?,?,?)",
+                "INSERT OR REPLACE INTO job_process(job_id, server_pid, server_start_time, terminal_result) VALUES(?,?,?,?)",
                 (
                     job["job_id"],
                     job.get("server_pid"),
                     job.get("server_start_time"),
                     job.get("terminal_result"),
-                    job.get("permission_scope_json"),
                 ),
-            )
-
-    def update_permission_scope(self, job_id: str, permission_scope_json: str) -> None:
-        with self.lock, self._connect() as con:
-            con.execute(
-                """INSERT INTO job_process(job_id, permission_scope_json) VALUES(?,?)
-                   ON CONFLICT(job_id) DO UPDATE SET permission_scope_json=excluded.permission_scope_json""",
-                (job_id, permission_scope_json),
             )
 
     def get(self, job_id: str) -> dict[str, Any]:
         with self.lock, self._connect() as con:
             row = con.execute(
-                """SELECT j.*, p.server_pid, p.server_start_time, p.terminal_result, p.permission_scope_json
+                """SELECT j.*, p.server_pid, p.server_start_time, p.terminal_result
                    FROM jobs j LEFT JOIN job_process p ON j.job_id = p.job_id
                    WHERE j.job_id=?""",
                 (job_id,),
@@ -1596,95 +1581,6 @@ class OpenCodeClient:
         ]
         return rules
 
-    def _validate_task_authorization(
-        self,
-        role: str,
-        task_authorization: dict[str, Any] | None,
-    ) -> list[str]:
-        """Validate exact Shell resource strings explicitly approved by the user."""
-        if task_authorization is None:
-            return []
-        if not isinstance(task_authorization, dict):
-            raise BridgeError("task_authorization 必须是对象。", category=ErrorCategory.APPLICATION_ERROR)
-        allowed_keys = {"approved_by_user", "approved_shell_commands"}
-        if set(task_authorization) - allowed_keys:
-            raise BridgeError("task_authorization 只允许 approved_by_user 和 approved_shell_commands。")
-        if task_authorization.get("approved_by_user") is not True:
-            raise BridgeError("任务级 Shell 授权必须明确标记 approved_by_user=true；不得推断用户已批准。")
-        if role not in ("writer", "reviser", "general"):
-            raise BridgeError(f"role={role!r} 不允许申请任务级 Shell 授权。Reviewer/Analyst 保持只读。")
-        commands = task_authorization.get("approved_shell_commands")
-        if not isinstance(commands, list) or not 1 <= len(commands) <= 5:
-            raise BridgeError("approved_shell_commands 必须包含 1–5 条用户已逐条确认的完整命令资源字符串。")
-        normalized: list[str] = []
-        for index, command in enumerate(commands, start=1):
-            if not isinstance(command, str) or not command or command != command.strip():
-                raise BridgeError(f"第 {index} 条已批准 Shell 命令必须是非空且无首尾空格的字符串。")
-            if len(command) > 2048 or any(ch in command for ch in ("\x00", "\r", "\n")):
-                raise BridgeError(f"第 {index} 条 Shell 命令过长或包含控制字符。")
-            if "*" in command or "?" in command:
-                raise BridgeError(f"第 {index} 条 Shell 命令不得包含通配符；只接受精确命令匹配。")
-            if command in normalized:
-                raise BridgeError(f"第 {index} 条 Shell 命令重复。")
-            normalized.append(command)
-        return normalized
-
-    def _permissions_with_task_authorization(
-        self,
-        role: str,
-        approved_shell_commands: list[str],
-    ) -> list[dict[str, str]]:
-        rules = self._permissions_for_role(role)
-        for command in approved_shell_commands:
-            rules.append({"action": "shell", "resource": command, "effect": "allow"})
-        return rules
-
-    def _clear_task_permission_scope(self, job: dict[str, Any]) -> dict[str, Any] | None:
-        raw_scope = job.get("permission_scope_json")
-        if not raw_scope:
-            return None
-        try:
-            scope = json.loads(raw_scope) if isinstance(raw_scope, str) else raw_scope
-        except Exception:
-            scope = {"state": "cleanup_pending", "error": "Stored task permission scope could not be parsed."}
-        if not isinstance(scope, dict) or scope.get("state") == "cleared":
-            return None
-        if scope.get("state") not in ("active", "cleanup_pending"):
-            return None
-
-        sid_path = urllib.parse.quote(job["session_id"], safe="")
-        try:
-            self.request(
-                "PATCH",
-                f"/api/session/{sid_path}",
-                {"permissions": self._permissions_for_role(job["role"])},
-            )
-            cleared = {
-                **scope,
-                "state": "cleared",
-                "cleared_at": time.time(),
-                "cleanup_error": None,
-            }
-            self.store.update_permission_scope(job["job_id"], json.dumps(cleared, ensure_ascii=False))
-            return {
-                "state": "cleared",
-                "approved_command_count": len(scope.get("approved_shell_commands") or []),
-            }
-        except Exception as exc:
-            pending = {
-                **scope,
-                "state": "cleanup_pending",
-                "cleanup_error": f"{type(exc).__name__}: {exc}"[:1000],
-                "last_cleanup_attempt_at": time.time(),
-            }
-            self.store.update_permission_scope(job["job_id"], json.dumps(pending, ensure_ascii=False))
-            return {
-                "state": "cleanup_pending",
-                "approved_command_count": len(scope.get("approved_shell_commands") or []),
-                "error": pending["cleanup_error"],
-                "warning": "Temporary session permission rules may remain until cleanup succeeds. A later reuse start will first restore the role baseline.",
-            }
-
     def session_inspect(
         self,
         raw_root: str,
@@ -1972,7 +1868,6 @@ class OpenCodeClient:
         estimated_cost: dict[str, Any] | None = None,
         prediction_confidence: float | None = None,
         benchmark_manifest: dict[str, Any] | None = None,
-        task_authorization: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         with self._start_lock:
@@ -1984,7 +1879,7 @@ class OpenCodeClient:
             if not isinstance(task, str) or not task.strip():
                 raise BridgeError("task 不能为空；请传入 Worker 要执行的自然语言任务。")
             if not isinstance(model_id, str) or not model_id.strip():
-                raise BridgeError("必须提供 model_id。请先调用 opencode_go_inspect，再使用用户选择的 opencode-go 模型。")
+                raise BridgeError("必须提供用户已选择的 opencode-go model_id。若当前上下文没有已确认的模型，请先调用 opencode_go_inspect 获取可用模型。")
             model_id = model_id.strip()
             if "/" in model_id:
                 prefix, short_id = model_id.split("/", 1)
@@ -1996,9 +1891,6 @@ class OpenCodeClient:
             strategy = (session_strategy or "new").strip().lower()
             if strategy not in ("new", "reuse", "fork"):
                 raise BridgeError(f"不支持 session_strategy={session_strategy!r}。可用策略：new, reuse, fork。")
-
-            approved_shell_commands = self._validate_task_authorization(role, task_authorization)
-            session_permissions = self._permissions_with_task_authorization(role, approved_shell_commands)
 
             inspection = self.models_and_usage(root)
             available_agents = {agent.get("id") for agent in inspection.get("agents", [])}
@@ -2054,7 +1946,7 @@ class OpenCodeClient:
                     "agent": ROLE_POLICIES[role]["agent"],
                     "model": model_ref,
                     "location": {"directory": root},
-                    "permissions": session_permissions,
+                    "permissions": self._permissions_for_role(role),
                 }
                 created_raw = self.request("POST", "/api/session", create_body)
                 created = _unwrap_data(created_raw)
@@ -2066,30 +1958,6 @@ class OpenCodeClient:
                 self.store.set_slot(root, slot, actual_session_id, role, model_id)
 
             session_id = actual_session_id
-
-            if strategy in ("reuse", "fork"):
-                sid_path = urllib.parse.quote(session_id, safe="")
-                try:
-                    self.request(
-                        "PATCH",
-                        f"/api/session/{sid_path}",
-                        {"permissions": session_permissions},
-                    )
-                except Exception as exc:
-                    self._release_session(session_id)
-                    raise BridgeError(
-                        "无法安全更新复用/Fork Session 的任务级权限；已停止提交 Worker，未执行用户任务。"
-                        f"原因：{type(exc).__name__}: {exc}",
-                        category=ErrorCategory.APPLICATION_ERROR,
-                    ) from exc
-
-            permission_scope = None
-            if approved_shell_commands:
-                permission_scope = json.dumps({
-                    "state": "active",
-                    "approved_shell_commands": approved_shell_commands,
-                    "match_mode": "exact",
-                }, ensure_ascii=False)
 
             server_pid = self.server.server_pid if self.server else None
             server_start = self.server.server_start_time if self.server else None
@@ -2105,7 +1973,6 @@ class OpenCodeClient:
                 "state": "submitted",
                 "server_pid": server_pid,
                 "server_start_time": server_start,
-                "permission_scope_json": permission_scope,
             })
 
             # 2. Record routing decision
@@ -2133,18 +2000,6 @@ class OpenCodeClient:
                     "and provide a concise summary and relative file link in your final response.\n\n"
                 )
 
-            task_authorization_hint = ""
-            if approved_shell_commands:
-                task_authorization_hint = (
-                    "TASK-SCOPED SHELL AUTHORIZATION: The user explicitly approved only the exact shell "
-                    "resource strings listed below. Use only these exact commands; do not add arguments, "
-                    "change paths, chain extra commands, or substitute another command. Any non-matching "
-                    "shell action must remain subject to the normal approval request. These temporary "
-                    "rules will be removed when the job reaches a terminal result.\n"
-                    + "\n".join(f"- {command}" for command in approved_shell_commands)
-                    + "\n\n"
-                )
-
             prompt = (
                 f"[WORKER ROLE: {role.upper()}] [SLOT: {slot}] [STRATEGY: {strategy.upper()}]\n"
                 f"You are an independent OpenCode Go worker. Work only within this Antigravity Project root:\n{root}\n\n"
@@ -2153,7 +2008,6 @@ class OpenCodeClient:
                 "Do not create nested agents or delegate to subagents.\n\n"
                 f"ROLE POLICY: {ROLE_POLICIES[role]['description']}\n"
                 + file_drop_hint
-                + task_authorization_hint
                 + "Use the selected OpenCode Go model. Preserve source files unless the task explicitly requires changes. "
                 "Report exactly which files you read or changed, what you verified, unresolved issues, and any permission requests.\n\n"
                 "USER TASK:\n" + task.strip()
@@ -2264,11 +2118,6 @@ class OpenCodeClient:
                 "max_concurrent_default": DEFAULT_MAX_CONCURRENT,
                 "active_workers_before_start": active_job_count,
                 "permissions": ROLE_POLICIES[role]["description"],
-                "task_authorization": {
-                    "mode": "exact_shell_commands_only",
-                    "approved_shell_commands": approved_shell_commands,
-                    "cleanup": "reset_to_role_baseline_on_terminal_result" if approved_shell_commands else None,
-                },
                 "decision_id": decision_id,
                 "important": "任务已异步提交。推荐使用 opencode_go_wait_result 或 opencode_go_status 查询，不要重复启动同一任务。",
             }
@@ -2445,7 +2294,7 @@ class OpenCodeClient:
             message = dict(latest[0])
             text_value = message.get("text")
             if isinstance(text_value, str) and len(text_value) > 2400:
-                message["text"] = text_value[:2400] + "\\n… [truncated; request output_mode='full' for complete text]"
+                message["text"] = text_value[:2400] + "\n… [truncated; request output_mode='full' for complete text]"
                 text_truncated = True
             compact_messages.append(message)
 
@@ -2468,23 +2317,11 @@ class OpenCodeClient:
             raise BridgeError("output_mode 仅允许 summary 或 full。", category=ErrorCategory.APPLICATION_ERROR)
         job = self._load_job(job_id, raw_root)
 
-        # Keep the complete payload cached; retry permission cleanup if it was pending.
+        # Keep the complete payload cached; the default Supervisor view is compact.
         if job.get("terminal_result"):
             try:
                 cached = json.loads(job["terminal_result"])
                 if isinstance(cached, dict):
-                    cleanup = self._clear_task_permission_scope(job)
-                    if cleanup:
-                        cached["permission_scope_cleanup"] = cleanup
-                        try:
-                            self.store.update(
-                                job_id,
-                                cached.get("state", job.get("state", "completed")),
-                                error=job.get("last_error"),
-                                terminal_result=json.dumps(cached, ensure_ascii=False),
-                            )
-                        except Exception:
-                            pass
                     return self._format_job_result(cached, output_mode)
             except Exception:
                 pass
@@ -2505,19 +2342,14 @@ class OpenCodeClient:
                     "time": info.get("time"),
                 })
 
-        permission_cleanup = None
-        if status.get("state") in ("completed", "failed", "interrupted"):
-            permission_cleanup = self._clear_task_permission_scope(job)
-
         result_payload = {
             **status,
             "messages": assistant_messages,
             "usage_total_observed": status["usage_so_far"],
             "usage_note": "Token 数和费用由 OpenCode API 的 assistant message 用量汇总；它们是本 Session 的消息级观测值，不是模型的额度余额。Reasoning、Cache Read/Write 分项保留，不与普通 Input/Output 混算。",
         }
-        if permission_cleanup:
-            result_payload["permission_scope_cleanup"] = permission_cleanup
 
+        # Cache the full payload, not the compact Supervisor view.
         if status.get("state") in ("completed", "failed", "interrupted"):
             self._release_session(job["session_id"])
             try:
@@ -2592,17 +2424,57 @@ class OpenCodeClient:
         data = _unwrap_data(raw)
         return {"job_id": job_id, "session_id": job["session_id"], "pending_permissions": data if isinstance(data, list) else []}
 
-    def reply_permission(self, job_id: str, raw_root: str, request_id: str, decision: str, message: str | None = None) -> dict[str, Any]:
+    def reply_permission(
+        self,
+        job_id: str,
+        raw_root: str,
+        request_id: str | None = None,
+        decision: str = "once",
+        message: str | None = None,
+        request_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         if decision not in ("once", "reject"):
-            raise BridgeError("decision 仅允许 once 或 reject；不开放 always，避免永久扩大权限。")
+            raise BridgeError("decision 仅允许 once 或 reject；不开放永久 always。")
+        has_single = request_id is not None
+        has_multiple = request_ids is not None
+        if has_single == has_multiple:
+            raise BridgeError("必须且只能提供 request_id 或 request_ids 其中一个。")
+
+        ids = [request_id] if has_single else request_ids
+        if not isinstance(ids, list) or not 1 <= len(ids) <= 10:
+            raise BridgeError("request_ids 必须包含 1–10 个待处理权限请求 ID。")
+        if any(not isinstance(item, str) or not item or item != item.strip() for item in ids):
+            raise BridgeError("权限请求 ID 必须是非空且无首尾空格的字符串。")
+        if len(set(ids)) != len(ids):
+            raise BridgeError("request_ids 不得包含重复 ID。")
+        if decision == "reject" and len(ids) > 1:
+            raise BridgeError("reject 一次只允许指定一个请求；批量回复仅用于用户明确批准的 once。")
+
         job = self._load_job(job_id, raw_root)
         sid = urllib.parse.quote(job["session_id"], safe="")
-        rid = urllib.parse.quote(request_id, safe="")
         body: dict[str, Any] = {"decision": decision}
         if message:
             body["message"] = message[:1000]
-        self.request("POST", f"/api/session/{sid}/permission/{rid}/reply", body)
-        return {"job_id": job_id, "session_id": job["session_id"], "request_id": request_id, "decision": decision}
+
+        replied: list[str] = []
+        failed: list[dict[str, str]] = []
+        for item in ids:
+            rid = urllib.parse.quote(item, safe="")
+            try:
+                self.request("POST", f"/api/session/{sid}/permission/{rid}/reply", body)
+                replied.append(item)
+            except Exception as exc:
+                failed.append({"request_id": item, "error": f"{type(exc).__name__}: {exc}"[:1000]})
+
+        return {
+            "job_id": job_id,
+            "session_id": job["session_id"],
+            "decision": decision,
+            "request_ids": ids,
+            "replied_request_ids": replied,
+            "failed_requests": failed,
+            "state": "completed" if not failed else ("partial" if replied else "failed"),
+        }
 
     def cancel_worker(self, job_id: str, raw_root: str) -> dict[str, Any]:
         job = self._load_job(job_id, raw_root)
