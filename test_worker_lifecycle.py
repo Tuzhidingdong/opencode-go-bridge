@@ -77,6 +77,12 @@ class MockLifecycleClient(core.OpenCodeClient):
             self.session_messages_map[sid] = []
             self.session_permissions_map[sid] = []
             return {"data": {"id": sid}}
+        if method == "PATCH" and path.startswith("/api/session/"):
+            parts = path.split("/")
+            sid = parts[3]
+            if isinstance(body, dict) and "permissions" in body:
+                self.session_permissions_map[sid] = body["permissions"]
+            return {"data": {}}
         if "/prompt" in path:
             if self.next_prompt_error:
                 err = self.next_prompt_error
@@ -122,9 +128,13 @@ class WorkerLifecycleTests(unittest.TestCase):
     def test_01_normal_completion(self):
         res = self.client.start_worker(
             raw_root=self.root,
-            role="analyst",
-            task="Analyze data files",
+            role="writer",
+            task="Run the approved test and report the result.",
             model_id="mimo-v2.6-flash",
+            task_authorization={
+                "approved_by_user": True,
+                "approved_shell_commands": ["python -m unittest tests.test_smoke"],
+            },
         )
         job_id = res["job_id"]
         sid = res["session_id"]
@@ -158,6 +168,17 @@ class WorkerLifecycleTests(unittest.TestCase):
         self.assertEqual(final["usage_total_observed"]["input"], 150)
         self.assertEqual(final["usage_total_observed"]["output"], 80)
         self.assertEqual(final["usage_total_observed"]["reasoning"], 10)
+        self.assertEqual(final["permission_scope_cleanup"]["state"], "cleared")
+        cleared_scope = json.loads(self.client.store.get(job_id)["permission_scope_json"])
+        self.assertEqual(cleared_scope["state"], "cleared")
+        self.assertIn(
+            {"action": "shell", "resource": "*", "effect": "ask"},
+            self.client.session_permissions_map[sid],
+        )
+        self.assertNotIn(
+            {"action": "shell", "resource": "python -m unittest tests.test_smoke", "effect": "allow"},
+            self.client.session_permissions_map[sid],
+        )
 
     # 测试 2：模型请求失败 (Model request failure / auth expired)
     def test_02_model_request_failure(self):

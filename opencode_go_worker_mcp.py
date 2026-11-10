@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from opencode_go_worker_core import CLIENT, BridgeError, shutdown, ErrorCategory, _compute_file_sha256, VERSION as CORE_VERSION
 
 SERVER_NAME = "opencode-go-worker-manager"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 MCP_START_TIME = datetime.now(timezone.utc).isoformat()
 MCP_BUILD_HASH = _compute_file_sha256(__file__)[:12] if os.path.exists(__file__) else "dev" 
 PROTOCOL_VERSION = "2025-03-26"
@@ -35,14 +35,10 @@ Before invoking any Worker, the Supervisor must evaluate if delegating to OpenCo
 ## 2. Worker Selection Workflow & Explicit Authorization (两级选择交互与显式授权)
 Current MCP does NOT have a hard code-level authorization lock; the Supervisor MUST strictly follow the explicit authorization protocol.
 When a task is suitable for Worker delegation:
-1. **Inspect First**: Call `opencode_go_inspect(project_root=...)` to fetch the real Project root, OpenCode server status, Go model catalog, and Workspace Usage.
-2. **Present Choices to User**: Clearly and separately present to the user:
-   - **Worker Role** (see Role Policies below).
-   - **Candidate Models & Recommendation Reasons** (along with the full active model list).
-   - **Current Project Root**.
-   - **Workspace Usage** (explicitly explain that Workspace Allowance is console rolling/weekly allowance, NOT individual model balance).
-3. **Allow Direct Execution Option**: Explicitly inform the user that they may choose to have Antigravity execute the task directly without launching a Worker.
-4. **Wait for Explicit User Decision**: Do NOT call `opencode_go_start` until the user explicitly selects a Role and a Model. Never automatically pick a model or role on behalf of the user.
+1. **Inspect only when needed**: Call `opencode_go_inspect(project_root=...)` when the user asks for the current catalog/allowance, or when the role/model has not already been selected from current context. Do not repeat inspect when the user has already selected a currently known role/model; `opencode_go_start` validates model availability internally.
+2. **Present authorization choices once**: Present the active Project root, Worker Role, selected/recommended Model, task boundary, expected deliverables, and whether Shell access may be needed. Offer direct Antigravity execution when delegation is unnecessary.
+3. **Wait for explicit user decision**: Do NOT call `opencode_go_start` until the user explicitly approves the role, model, project, and task. Never silently launch a Worker.
+4. **Optional exact-command authorization**: When the task requires a small, known set of Shell commands, show each complete command/resource string to the user and obtain explicit approval for each. Only then pass `task_authorization={"approved_by_user":true,"approved_shell_commands":[...]}`. No wildcards are accepted. This only allows exact matching Shell resources in that one Session; all other Shell actions remain `ask`. Never use this field for Reviewer/Analyst roles or infer approval. The temporary rules are reset to the role baseline when the terminal result is retrieved.
 
 ## 3. Worker Role Policies & Security Boundaries (角色权限矩阵)
 Strictly enforce role policies:
@@ -59,9 +55,10 @@ Strictly enforce role policies:
 - Never misrepresent Workspace Allowance as individual model quota/balance.
 
 ## 5. Post-task Reporting & Token Transparency (任务终态核查与用量透明)
-- **Waiting for Worker**: Prefer `opencode_go_wait_result(project_root, job_id, timeout_seconds=60)` instead of rapid Supervisor status polling loops. It waits internally within the Manager, yields immediately if permissions require approval or if the worker reaches terminal state, and returns final idempotent results upon completion.
-- While a Worker is running, call `opencode_go_status` only when an immediate execution-state or permission check is useful. Running status is lightweight and intentionally omits live token totals and the latest assistant excerpt.
-- Once the Worker reaches a terminal state, call `opencode_go_result` once to verify the state and retrieve the complete assistant messages and observed token usage. Do not call status again after a successful terminal result unless an inconsistency requires diagnosis.
+- **One wait call first**: Prefer `opencode_go_wait_result(project_root, job_id, timeout_seconds=300, output_mode="summary")`. The Manager waits internally and returns the compact terminal result itself when completed. Do NOT call `opencode_go_result` again after a terminal result was returned by wait_result.
+- If wait_result returns `waiting_for_permission`, show the exact action/resource and obtain the user's explicit decision, reply once/reject, then wait again. If it returns `timeout_expired`, call wait_result again; do not submit a duplicate job or poll status in a loop.
+- Use `opencode_go_result(output_mode="full")` only when the user asks for full messages/logs or the summary explicitly reports truncation and the omitted detail is necessary.
+- While running, call `opencode_go_status` only when an immediate state check is genuinely useful.
 - Accurately report to user:
   - Job ID & Session ID.
   - Project Root.
@@ -112,10 +109,11 @@ TOOLS: list[dict[str, Any]] = [
         "name": "opencode_go_start",
         "description": (
             "创建一个独立 OpenCode Go Worker Session，并异步提交自然语言任务。每个 Worker 一个独立 Session。"
-            "每次调用前必须已 inspect 并得到用户选择的 model_id；只接受当前目录的 opencode-go 可用模型。"
+            "model_id 必须来自用户明确选择或已确认的当前可用模型；如果上下文已有明确模型选择，不必重复 inspect。Manager 会在启动时校验模型。"
             "role 可选 writer/reviewer/reviser/analyst/general。默认最多 3 个并发 Worker；只有用户明确要求增加并发时才允许 allow_over_limit=true，硬上限 6。"
-            "project_root 必须是当前 Antigravity 活动 Project 根目录。Worker 禁止访问根目录外的文件、禁止嵌套 subagent；Reviewer/Analyst 禁止编辑且禁止 Shell；Writer/Reviser 的 Shell 操作逐项要求批准。"
-            "返回 job_id 后使用 status/result 跟踪，不要重复提交同一任务。Antigravity 应自主规划角色与顺序，但服从用户明确指定。"
+            "project_root 必须是当前 Antigravity 活动 Project 根目录。Worker 禁止访问根目录外的文件、禁止嵌套 subagent；Reviewer/Analyst 禁止编辑且禁止 Shell。"
+            "可选 task_authorization 仅能包含用户逐条明确批准的完整 Shell 命令字符串；精确匹配、无通配符、仅限当前 Session，终态取回结果时自动恢复角色默认权限。未批准命令仍按原策略 ask。"
+            "wait_result 在完成时已经返回最终摘要，不要再重复调用 result。"
         ),
         "inputSchema": {
             "type": "object",
@@ -131,6 +129,21 @@ TOOLS: list[dict[str, Any]] = [
                 "session_id": {"type": "string", "description": "显式指定复用或 Fork 的目标 session_id（可选）。"},
                 "decision_reason": {"type": "string", "description": "Anti 选择该 Session 策略的自主决策理由。"},
                 "benchmark_manifest": {"type": "object", "description": "基准测试不可变 Manifest 元数据（可选，记录不可变输入与参数）"},
+                "task_authorization": {
+                    "type": "object",
+                    "description": "仅在用户已明确逐条批准 Shell 命令后提供。只允许精确命令字符串，不接受通配符；不得用于 reviewer/analyst。",
+                    "properties": {
+                        "approved_by_user": {"type": "boolean", "enum": [true]},
+                        "approved_shell_commands": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 5,
+                            "items": {"type": "string", "minLength": 1, "maxLength": 2048}
+                        }
+                    },
+                    "required": ["approved_by_user", "approved_shell_commands"],
+                    "additionalProperties": false
+                },
                 "estimated_cost": {"type": "object", "description": "Anti 预测的成本结构及分项数据（可选）。"},
                 "prediction_confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0, "description": "预测置信度（可选）。"},
             },
@@ -218,7 +231,8 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "project_root": {"type": "string", "description": "当前 Antigravity 活动 Project 的绝对根目录。"},
                 "job_id": {"type": "string", "description": "Worker 任务 ID。"},
-                "timeout_seconds": {"type": "integer", "default": 60, "minimum": 1, "maximum": 300, "description": "内部等待超时秒数，默认 60 秒。"},
+                "timeout_seconds": {"type": "integer", "default": 300, "minimum": 1, "maximum": 300, "description": "内部等待秒数，默认 300 秒；超时后可再次 wait_result，不应重复提交任务。"},
+                "output_mode": {"type": "string", "enum": ["summary", "full"], "default": "summary", "description": "默认只返回最后一条 assistant 消息摘要与完整 token 汇总；full 返回全部消息。"},
             },
             "required": ["project_root", "job_id"],
             "additionalProperties": False,
@@ -231,8 +245,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "opencode_go_result",
-        "description": "获取当前 Antigravity Project 内指定 Worker 的完整 assistant 回复、各条 assistant message 的模型/Token/费用，以及当前状态。必须传入当前 Project 根目录，防止跨项目访问。",
-        "inputSchema": {"type": "object", "properties": {"project_root": {"type": "string"}, "job_id": {"type": "string"}}, "required": ["project_root", "job_id"], "additionalProperties": False},
+        "description": "获取 Worker 结果。默认 summary 仅返回最后一条 assistant 消息摘要及完整 token 汇总；需要所有消息时指定 output_mode=full。必须传入当前 Project 根目录。",
+        "inputSchema": {"type": "object", "properties": {"project_root": {"type": "string"}, "job_id": {"type": "string"}, "output_mode": {"type": "string", "enum": ["summary", "full"], "default": "summary"}}, "required": ["project_root", "job_id"], "additionalProperties": False},
     },
     {
         "name": "opencode_go_list_jobs",
@@ -330,6 +344,7 @@ def handle_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             return _json_result({"error": "缺少必填参数 project_root。"}, is_error=True)
         raw_root = start_args.pop("project_root")
         manifest_meta = start_args.pop("benchmark_manifest", None)
+        task_authorization = start_args.pop("task_authorization", None)
 
         if manifest_meta is not None and not isinstance(manifest_meta, dict):
             return _json_result({"error": "非法参数：benchmark_manifest 必须是字典对象(object/dict)。"}, is_error=True)
@@ -348,6 +363,7 @@ def handle_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
 
         if accepts_manifest:
             start_args["benchmark_manifest"] = manifest_meta
+            start_args["task_authorization"] = task_authorization
             res = CLIENT.start_worker(**start_args)
         else:
             # Legacy Client without benchmark_manifest: decouple and record via JobStore if provided
@@ -373,12 +389,15 @@ def handle_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         return _json_result(CLIENT.wait_result(
             job_id=args["job_id"],
             raw_root=args["project_root"],
-            timeout_seconds=args.get("timeout_seconds", 60),
+            timeout_seconds=args.get("timeout_seconds", 300),
+            output_mode=args.get("output_mode", "summary"),
         ))
     if name == "opencode_go_status":
         return _json_result(CLIENT.job_status(args["job_id"], args["project_root"]))
     if name == "opencode_go_result":
-        return _json_result(CLIENT.job_result(args["job_id"], args["project_root"]))
+        return _json_result(CLIENT.job_result(
+            args["job_id"], args["project_root"], output_mode=args.get("output_mode", "summary")
+        ))
     if name == "opencode_go_list_jobs":
         return _json_result(CLIENT.list_jobs(args["project_root"], args.get("limit", 30), output_mode=args.get("output_mode", "summary")))
     if name == "opencode_go_permissions":

@@ -45,6 +45,8 @@ class FakeClient(core.OpenCodeClient):
             ]}
         if path == "/api/session/active":
             return {"data": {}}
+        if method == "PATCH" and path.startswith("/api/session/"):
+            return {"data": {}}
         if path == "/api/session":
             return {"data": {"id": f"ses_{uuid.uuid4().hex[:12]}"}}
         if path.endswith("/prompt"):
@@ -133,6 +135,46 @@ class WorkerManagerTests(unittest.TestCase):
         rules = self.client._permissions_for_role("writer")
         self.assertTrue(any(r["action"] == "edit" and r["effect"] == "allow" for r in rules))
         self.assertTrue(any(r["action"] == "shell" and r["effect"] == "ask" for r in rules))
+
+    def test_task_authorization_is_exact_and_user_approved(self):
+        command = "python -m unittest tests.test_smoke"
+        result = self.client.start_worker(
+            raw_root=self.root,
+            role="writer",
+            task="Run the approved test command.",
+            model_id="mimo-v2.6-flash",
+            task_authorization={"approved_by_user": True, "approved_shell_commands": [command]},
+        )
+        create_call = next(call for call in self.client.calls if call[1] == "/api/session")
+        rules = create_call[2]["permissions"]
+        self.assertIn({"action": "shell", "resource": command, "effect": "allow"}, rules)
+        self.assertIn({"action": "shell", "resource": "*", "effect": "ask"}, rules)
+        stored_scope = json.loads(self.client.store.get(result["job_id"])["permission_scope_json"])
+        self.assertEqual(stored_scope["state"], "active")
+        self.assertEqual(stored_scope["approved_shell_commands"], [command])
+
+    def test_task_authorization_rejects_false_approval_wildcards_and_read_only_roles(self):
+        base = {
+            "raw_root": self.root,
+            "role": "writer",
+            "task": "Run one command.",
+            "model_id": "mimo-v2.6-flash",
+        }
+        with self.assertRaises(core.BridgeError):
+            self.client.start_worker(**base, task_authorization={
+                "approved_by_user": False,
+                "approved_shell_commands": ["python -m unittest"],
+            })
+        with self.assertRaises(core.BridgeError):
+            self.client.start_worker(**base, task_authorization={
+                "approved_by_user": True,
+                "approved_shell_commands": ["python *"],
+            })
+        with self.assertRaises(core.BridgeError):
+            self.client.start_worker(**{**base, "role": "analyst"}, task_authorization={
+                "approved_by_user": True,
+                "approved_shell_commands": ["python -m unittest"],
+            })
 
     def test_non_go_model_rejected(self):
         with self.assertRaises(core.BridgeError):
