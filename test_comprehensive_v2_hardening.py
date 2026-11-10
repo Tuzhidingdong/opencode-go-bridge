@@ -253,6 +253,9 @@ class ComprehensiveV2HardeningTests(unittest.TestCase):
         self.client.store.set_slot(canonical_root, slot_name, "ses_busy_test", "reviewer", "qwen3.8-flash")
         # Acquire lock to make it busy
         self.client.store.acquire_session_lock("ses_busy_test", "job_existing_busy", "inst_1")
+        # Keep this unit test offline: the routing predictor needs only cached
+        # cumulative-token metadata and must not try to launch a real OpenCode CLI.
+        self.client.session_inspect = lambda r, **kw: {"cumulative_tokens": {"input": 0}}
 
         cost_pred = self.client.predict_session_cost(self.project_root, slot_name, "Some follow up task")
         self.assertEqual(cost_pred["recommended_strategy"], "new")
