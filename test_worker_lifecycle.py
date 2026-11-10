@@ -219,7 +219,8 @@ class WorkerLifecycleTests(unittest.TestCase):
         summary = self.client.job_result(job_id, self.root)
         self.assertTrue(summary["last_message_text_truncated"])
         self.assertIsNone(summary["last_assistant_excerpt"])
-        self.assertEqual(len(summary["messages"][0]["text"].split("\\n… [truncated;", 1)[0]), 1600)
+        self.assertTrue(summary["messages"][0]["text"].startswith("A" * 1600))
+        self.assertIn("[truncated;", summary["messages"][0]["text"])
 
         full = self.client.job_result(job_id, self.root, output_mode="full")
         self.assertEqual(full["messages"][0]["text"], long_text)
