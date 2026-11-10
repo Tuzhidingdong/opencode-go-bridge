@@ -2293,13 +2293,16 @@ class OpenCodeClient:
         if latest:
             message = dict(latest[0])
             text_value = message.get("text")
-            if isinstance(text_value, str) and len(text_value) > 2400:
-                message["text"] = text_value[:2400] + "\n… [truncated; request output_mode='full' for complete text]"
+            if isinstance(text_value, str) and len(text_value) > 1600:
+                message["text"] = text_value[:1600] + "\n… [truncated; request output_mode='full' for complete text]"
                 text_truncated = True
             compact_messages.append(message)
 
         return {
             **payload,
+            # The final message above already contains this text; omit the
+            # duplicate excerpt to avoid paying for it twice in Supervisor context.
+            "last_assistant_excerpt": None,
             "messages": compact_messages,
             "assistant_message_count": len(messages),
             "omitted_assistant_messages": max(0, len(messages) - len(compact_messages)),

@@ -192,6 +192,39 @@ class WorkerLifecycleTests(unittest.TestCase):
         self.assertEqual(full["messages"][0]["text"], "Intermediate note")
         self.assertEqual(full["output_mode"], "full")
 
+    def test_01c_summary_truncates_long_final_text_but_full_mode_keeps_it(self):
+        res = self.client.start_worker(
+            raw_root=self.root,
+            role="analyst",
+            task="Check compact final text truncation and full retrieval.",
+            model_id="mimo-v2.6-flash",
+        )
+        job_id = res["job_id"]
+        sid = res["session_id"]
+        long_text = "A" * 4000
+        self.client.session_messages_map[sid] = [
+            {
+                "info": {
+                    "id": "msg_long",
+                    "role": "assistant",
+                    "finish": "completed",
+                    "tokens": {"input": 200, "output": 100},
+                    "cost": 0.001,
+                },
+                "parts": [{"type": "text", "text": long_text}],
+            }
+        ]
+        self.client.active_sessions.pop(sid, None)
+
+        summary = self.client.job_result(job_id, self.root)
+        self.assertTrue(summary["last_message_text_truncated"])
+        self.assertIsNone(summary["last_assistant_excerpt"])
+        self.assertEqual(len(summary["messages"][0]["text"].split("\\n… [truncated;", 1)[0]), 1600)
+
+        full = self.client.job_result(job_id, self.root, output_mode="full")
+        self.assertEqual(full["messages"][0]["text"], long_text)
+        self.assertEqual(full["output_mode"], "full")
+
     # 测试 2：模型请求失败 (Model request failure / auth expired)
     def test_02_model_request_failure(self):
         self.client.next_prompt_error = core.BridgeError(
