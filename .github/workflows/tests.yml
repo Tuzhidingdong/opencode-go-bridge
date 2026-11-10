@@ -2,7 +2,7 @@ name: Worker Manager tests
 
 on:
   push:
-    branches: ["main", "upgrade/**"]
+    branches: ["main"]
   pull_request:
   workflow_dispatch:
 
