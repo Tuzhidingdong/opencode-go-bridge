@@ -262,7 +262,7 @@ TOOLS: list[dict[str, Any]] = [
             },
             "required": ["project_root", "job_id", "decision"],
             "oneOf": [{"required": ["request_id"]}, {"required": ["request_ids"]}],
-            "additionalProperties": false
+            "additionalProperties": False
         },
     },
     {
