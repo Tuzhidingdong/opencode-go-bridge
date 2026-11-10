@@ -71,8 +71,9 @@ class ComprehensiveV2HardeningTests(unittest.TestCase):
 
         # Verify decision_reason was recorded
         cur_job = res["job_id"]
-        decisions = self.client.store.list_decisions(self.project_root, limit=5)
-        self.assertTrue(any(d.get("decision_reason") == "Autonomous benchmark replay authorization" for d in decisions))
+        decision = self.client.store.get_decision_by_job(cur_job)
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.get("decision_reason"), "Autonomous benchmark replay authorization")
 
         # Verify benchmark_manifest was recorded
         mf = self.client.get_benchmark_manifest(cur_job)
@@ -241,14 +242,15 @@ class ComprehensiveV2HardeningTests(unittest.TestCase):
 
         res = self.client.models_and_usage(self.project_root, output_mode="summary")
         rt = res["runtime_version"]
-        self.assertEqual(rt["version"], "0.2.0")
+        self.assertEqual(rt["version"], core.VERSION)
         self.assertTrue(isinstance(rt["core_build_hash"], str))
         self.assertIn("start_time", rt)
 
     def test_07_adaptive_session_routing_hard_constraints(self):
         """Test hard constraints: busy session blocks reuse/fork, token threshold > 70k recommends fork/new."""
         slot_name = "test_slot_constraints"
-        self.client.store.set_slot(self.project_root, slot_name, "ses_busy_test", "reviewer", "qwen3.8-flash")
+        canonical_root = core.canonical_project_root(self.project_root)
+        self.client.store.set_slot(canonical_root, slot_name, "ses_busy_test", "reviewer", "qwen3.8-flash")
         # Acquire lock to make it busy
         self.client.store.acquire_session_lock("ses_busy_test", "job_existing_busy", "inst_1")
 
@@ -288,7 +290,7 @@ class ComprehensiveV2HardeningTests(unittest.TestCase):
             line1 = proc.stdout.readline()
             resp1 = json.loads(line1)
             self.assertEqual(resp1["id"], 1)
-            self.assertEqual(resp1["result"]["serverInfo"]["version"], "0.2.0")
+            self.assertEqual(resp1["result"]["serverInfo"]["version"], core.VERSION)
 
             # 2. Send bad call (missing required parameters) -> should return structured error without crashing
             bad_req = {
