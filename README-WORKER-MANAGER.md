@@ -14,6 +14,12 @@ A local stdio MCP server for Antigravity. It orchestrates multiple independent O
 
 ## Adaptive Session Routing (自适应 Session 路由)
 
+**Worker Slot Binding:** Each Slot is bound to its current Session's exact Role and Model. Reuse and Fork inherit the parent Session's Agent, Model, and permissions; the Manager rejects a Role/Model mismatch before submitting a prompt. To change either dimension, create a new Session or use a different Slot.
+
+**Inspect is on-demand:** Do not run a full model/allowance Inspect before every Job. Inspect when the user requests the catalog or allowance, when no current model selection basis exists, or when the selected model is rejected/uncertain. `opencode_go_start` performs its own live model and required-Agent validation before Session creation.
+
+**Cost prediction is heuristic:** It estimates token/cache vectors and rework risk. It is a routing aid, not an exact provider bill. Use Session Inspect and prediction only when context health or strategy is genuinely uncertain.
+
 Antigravity (Supervisor) autonomously manages worker sessions instead of fixing sessions to always-new or always-reuse:
 
 1. **Job vs. Session vs. Worker Slot**:
