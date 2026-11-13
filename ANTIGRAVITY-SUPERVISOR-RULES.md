@@ -46,7 +46,7 @@ Before invoking any Worker, the Supervisor must first evaluate:
 1. **当前 Project**：实际工作区根路径。
 2. **OpenCode 服务状态**：版本号与连接健康度。
 3. **Workspace Allowance**：Rolling、Weekly、Monthly 的使用百分比与状态（**必须明确注明：这是整个 Workspace 的限额重置周期，不是单个模型的剩余额度**）。
-4. **全部 Active 状态的 opencode-go 模型列表**：展示全部 31 个可用模型 ID，允许用户完全自主选择任意可用模型。
+4. **全部 Active 状态的 opencode-go 模型列表**：展示当前全部 Active 模型 ID；模型数量必须动态读取，不得硬编码，允许用户完全自主选择任意可用模型。
 5. **推荐模型分组及理由**：
    - **轻量高速 / 结构统计**：如 `minimax-m3.1-flash`, `deepseek-v4.1-flash`, `qwen3.8-flash`。
    - **免费 / 连通测试**：如 `iceman-contributor-free`, `beam-free`。
