@@ -188,13 +188,17 @@ class WorkerManagerTests(unittest.TestCase):
         finally:
             mcp.CLIENT = original_client
 
-        self.assertEqual(summary["output_mode"], "summary")
-        self.assertEqual(summary["count"], 1)
-        self.assertNotIn("terminal_result", summary["jobs"][0])
-        self.assertEqual(full["output_mode"], "full")
-        self.assertEqual(full["count"], 1)
-        self.assertIn("terminal_result", full["jobs"][0])
-        self.assertIn("large terminal result", full["jobs"][0]["terminal_result"])
+        self.assertFalse(summary["isError"])
+        self.assertFalse(full["isError"])
+        summary_data = summary["structuredContent"]
+        full_data = full["structuredContent"]
+        self.assertEqual(summary_data["output_mode"], "summary")
+        self.assertEqual(summary_data["count"], 1)
+        self.assertNotIn("terminal_result", summary_data["jobs"][0])
+        self.assertEqual(full_data["output_mode"], "full")
+        self.assertEqual(full_data["count"], 1)
+        self.assertIn("terminal_result", full_data["jobs"][0])
+        self.assertIn("large terminal result", full_data["jobs"][0]["terminal_result"])
 
     def test_list_jobs_rejects_unknown_output_mode(self):
         with self.assertRaises(core.BridgeError):
