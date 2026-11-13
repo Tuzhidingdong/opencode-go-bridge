@@ -51,6 +51,7 @@ class MockRoutingClient(core.OpenCodeClient):
         if path.startswith("/api/model?"):
             return {"data": [
                 {"id": "mimo-v2.6-flash", "providerID": "opencode-go", "name": "MiMo Flash", "status": "active", "limit": {"context": 128000}},
+                {"id": "kimi-k3.1-pro", "providerID": "opencode-go", "name": "Kimi Pro", "status": "active", "limit": {"context": 256000}},
             ]}
         if path.startswith("/api/experimental/usage/limits?"):
             return {"data": {"workspace": {"name": "Test"}, "go": {"weekly": {"percent": 0}}, "budgets": []}}
@@ -422,6 +423,76 @@ class AdaptiveSessionRoutingTests(unittest.TestCase):
         self.assertEqual(actual_json["input"], 620)
         self.assertEqual(actual_json["output"], 290)
 
+
+    # 12. Reuse must reject a model mismatch because the Session keeps its creation model.
+    def test_12_reuse_rejects_model_mismatch(self):
+        created = self.client.start_worker(
+            raw_root=self.root1,
+            role="writer",
+            worker_slot="Pinned_Writer",
+            task="Create the initial writer session",
+            model_id="mimo-v2.6-flash",
+            session_strategy="new",
+        )
+        sid = created["session_id"]
+        self.client.session_messages_map[sid] = [{
+            "info": {"role": "assistant", "finish": "completed", "tokens": {"input": 100, "output": 20}},
+            "parts": [{"type": "text", "text": "done"}],
+        }]
+        self.client.job_result(created["job_id"], self.root1)
+
+        prompt_count_before = sum(1 for _, path, _ in self.client.calls if path.endswith("/prompt"))
+        with self.assertRaisesRegex(core.BridgeError, "Slot.*已绑定"):
+            self.client.start_worker(
+                raw_root=self.root1,
+                role="writer",
+                worker_slot="Pinned_Writer",
+                task="Attempt to switch the reused session model",
+                model_id="kimi-k3.1-pro",
+                session_strategy="reuse",
+            )
+        prompt_count_after = sum(1 for _, path, _ in self.client.calls if path.endswith("/prompt"))
+        self.assertEqual(prompt_count_after, prompt_count_before)
+
+    # 13. Fork must reject a Role mismatch because it inherits parent Agent/permissions.
+    def test_13_fork_rejects_role_mismatch(self):
+        created = self.client.start_worker(
+            raw_root=self.root1,
+            role="writer",
+            worker_slot="Pinned_Fork",
+            task="Create the parent writer session",
+            model_id="mimo-v2.6-flash",
+            session_strategy="new",
+        )
+        sid = created["session_id"]
+        self.client.session_messages_map[sid] = [{
+            "info": {"role": "assistant", "finish": "completed", "tokens": {"input": 100, "output": 20}},
+            "parts": [{"type": "text", "text": "done"}],
+        }]
+        self.client.job_result(created["job_id"], self.root1)
+
+        fork_count_before = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
+        with self.assertRaisesRegex(core.BridgeError, "Slot.*已绑定"):
+            self.client.start_worker(
+                raw_root=self.root1,
+                role="reviewer",
+                worker_slot="Pinned_Fork",
+                task="Attempt to fork into a read-only reviewer session",
+                model_id="mimo-v2.6-flash",
+                session_strategy="fork",
+            )
+        fork_count_after = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
+        self.assertEqual(fork_count_after, fork_count_before)
+
+    # 14. MCP instructions must describe on-demand Inspect and the slot binding invariant.
+    def test_14_mcp_instructions_use_on_demand_inspect_and_slot_binding(self):
+        self.assertIn("on-demand", mcp.SERVER_INSTRUCTIONS.lower())
+        self.assertIn("not a mandatory preflight", mcp.SERVER_INSTRUCTIONS.lower())
+        self.assertIn("exact Role and Model", mcp.SERVER_INSTRUCTIONS)
+        inspect_tool = next(t for t in mcp.TOOLS if t["name"] == "opencode_go_inspect")
+        start_tool = next(t for t in mcp.TOOLS if t["name"] == "opencode_go_start")
+        self.assertNotIn("每次新任务开始前先调用", inspect_tool["description"])
+        self.assertNotIn("每次调用前必须已 inspect", start_tool["description"])
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
