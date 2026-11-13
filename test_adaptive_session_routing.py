@@ -495,5 +495,37 @@ class AdaptiveSessionRoutingTests(unittest.TestCase):
         self.assertNotIn("每次新任务开始前先调用", inspect_tool["description"])
         self.assertNotIn("每次调用前必须已 inspect", start_tool["description"])
 
+    # 15. Cross-slot Fork must validate the source Session's persisted Model binding.
+    def test_15_cross_slot_fork_rejects_parent_model_mismatch(self):
+        created = self.client.start_worker(
+            raw_root=self.root1,
+            role="writer",
+            worker_slot="CrossSlot_Parent",
+            task="Create parent writer session",
+            model_id="mimo-v2.6-flash",
+            session_strategy="new",
+        )
+        sid = created["session_id"]
+        self.client.session_messages_map[sid] = [{
+            "info": {"role": "assistant", "finish": "completed", "tokens": {"input": 100, "output": 20}},
+            "parts": [{"type": "text", "text": "done"}],
+        }]
+        self.client.job_result(created["job_id"], self.root1)
+
+        fork_count_before = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
+        with self.assertRaisesRegex(core.BridgeError, "父 Session 已绑定"):
+            self.client.start_worker(
+                raw_root=self.root1,
+                role="writer",
+                worker_slot="CrossSlot_Invalid_Branch",
+                session_id=sid,
+                task="Attempt cross-slot fork with a different model",
+                model_id="kimi-k3.1-pro",
+                session_strategy="fork",
+            )
+        fork_count_after = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
+        self.assertEqual(fork_count_after, fork_count_before)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
