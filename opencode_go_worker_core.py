@@ -888,6 +888,38 @@ class JobStore:
             ).fetchone()
         return dict(row) if row else None
 
+
+    def get_session_binding(self, project_root: str, session_id: str) -> dict[str, Any] | None:
+        """Return the persisted Role/Model binding for a Session in this Project.
+
+        Reused Sessions have multiple Job records. Conflicting historical bindings
+        are treated as unverifiable rather than trusting the latest record.
+        """
+        with self.lock, self._connect() as con:
+            rows = con.execute(
+                """SELECT role, model_id FROM jobs
+                   WHERE project_root=? AND session_id=?
+                   ORDER BY created_at ASC""",
+                (project_root, session_id),
+            ).fetchall()
+        if not rows:
+            return None
+        bindings = {(row["role"], row["model_id"]) for row in rows}
+        if len(bindings) != 1:
+            return {
+                "project_root": project_root,
+                "session_id": session_id,
+                "consistent": False,
+            }
+        role, model_id = next(iter(bindings))
+        return {
+            "project_root": project_root,
+            "session_id": session_id,
+            "role": role,
+            "model_id": model_id,
+            "consistent": True,
+        }
+
     def set_slot(
         self,
         project_root: str,
@@ -1921,35 +1953,70 @@ class OpenCodeClient:
             previous_sid = slot_info.get("current_session_id") if slot_info else None
             actual_session_id: str | None = None
 
-            # A slot is a persistent execution identity, not just a cache bucket.
-            # Reuse and Fork inherit the parent Session's model and Agent/permissions,
-            # so only the exact slot binding may be continued or branched.
+
             if strategy in ("reuse", "fork"):
                 selected_parent_sid = session_id or previous_sid
                 if not selected_parent_sid:
-                    action = "复用" if strategy == "reuse" else "Fork"
-                    raise BridgeError(
-                        f"Worker Slot {slot!r} 在当前项目暂无可供{action}的历史 Session。请先使用 'new' 策略。",
-                        category=ErrorCategory.APPLICATION_ERROR,
-                    )
-                if not slot_info or selected_parent_sid != previous_sid:
+                    if strategy == "reuse":
+                        message = f"Worker Slot {slot!r} 在当前项目暂无历史 Session 可复用。请先使用 'new' 策略。"
+                    else:
+                        message = f"Worker Slot {slot!r} 在当前项目暂无可供 Fork 的历史 Session。请先使用 'new' 策略。"
+                    raise BridgeError(message, category=ErrorCategory.APPLICATION_ERROR)
+
+                # Resolve the parent by its persisted Job history, not only by the
+                # destination Slot. This permits a deliberate cross-slot Fork while
+                # proving the parent's Project, Role and Model identity.
+                parent_binding = self.store.get_session_binding(root, selected_parent_sid)
+                if not parent_binding:
                     raise BridgeError(
                         f"拒绝对 Session {selected_parent_sid!r} 执行 {strategy}："
-                        f"无法通过当前 Project/Worker Slot {slot!r} 验证其 Role 与 Model 绑定。"
-                        "请使用该 Slot 当前 Session，或创建新的 Worker Slot/Session。",
+                        "当前 Project 中没有可验证的 Session 历史记录。",
                         category=ErrorCategory.APPLICATION_ERROR,
                     )
-                bound_role = slot_info.get("role")
-                bound_model = slot_info.get("model_id")
+                if not parent_binding.get("consistent", False):
+                    raise BridgeError(
+                        f"拒绝对 Session {selected_parent_sid!r} 执行 {strategy}："
+                        "历史 Job 记录中的 Role/Model 绑定不一致，无法安全验证。",
+                        category=ErrorCategory.APPLICATION_ERROR,
+                    )
+
+                bound_role = parent_binding["role"]
+                bound_model = parent_binding["model_id"]
                 if bound_role != role or bound_model != model_id:
                     raise BridgeError(
-                        f"拒绝对 Worker Slot {slot!r} 执行 {strategy}："
-                        f"该 Slot 已绑定 role={bound_role!r}, model_id={bound_model!r}，"
+                        f"拒绝对 Session {selected_parent_sid!r} 执行 {strategy}："
+                        f"父 Session 已绑定 role={bound_role!r}, model_id={bound_model!r}，"
                         f"本次请求为 role={role!r}, model_id={model_id!r}。"
                         "Reuse/Fork 会继承原 Session 的 Agent、模型和权限；"
-                        "请使用 session_strategy='new' 或不同的 worker_slot。",
+                        "请使用匹配的 Role/Model 创建新 Session。",
                         category=ErrorCategory.APPLICATION_ERROR,
                     )
+
+                if strategy == "reuse":
+                    # Reuse stays tied to the current Session of this exact Slot.
+                    if not slot_info or selected_parent_sid != previous_sid:
+                        raise BridgeError(
+                            f"拒绝对 Session {selected_parent_sid!r} 执行 reuse："
+                            f"它不是当前 Project/Worker Slot {slot!r} 绑定的 Session。",
+                            category=ErrorCategory.APPLICATION_ERROR,
+                        )
+                    if slot_info.get("role") != bound_role or slot_info.get("model_id") != bound_model:
+                        raise BridgeError(
+                            f"拒绝复用 Worker Slot {slot!r}：Slot 元数据与父 Session 历史绑定不一致。",
+                            category=ErrorCategory.APPLICATION_ERROR,
+                        )
+                elif slot_info:
+                    # An existing destination Slot can receive a branch only when
+                    # its own Role/Model identity is compatible with the parent.
+                    if slot_info.get("role") != role or slot_info.get("model_id") != model_id:
+                        raise BridgeError(
+                            f"拒绝 Fork 到 Worker Slot {slot!r}：目标 Slot 已绑定 "
+                            f"role={slot_info.get('role')!r}, model_id={slot_info.get('model_id')!r}；"
+                            f"父 Session 使用 role={role!r}, model_id={model_id!r}。"
+                            "请使用新的 Worker Slot。",
+                            category=ErrorCategory.APPLICATION_ERROR,
+                        )
+
                 if strategy == "fork":
                     parent_busy, active_parent_job = self.is_session_busy(selected_parent_sid)
                     if parent_busy:
