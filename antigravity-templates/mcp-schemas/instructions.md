@@ -20,7 +20,7 @@ Default hierarchy is Supervisor -> one Worker for each task. Default concurrency
 
 ## 3. Role and Session identity
 - `analyst` and `reviewer` are read-only (`explore`; edit/shell denied). `writer` and `reviser` use `build` with project-scoped edits and one-time shell approval. `general` requires approval for edits and shell. All roles deny nested subagents.
-- A Worker Slot is bound to its current Session, exact Role, and exact Model. `reuse` and `fork` inherit the parent Session configuration; therefore they are allowed only when the requested Role and Model exactly match that Slot binding.
+- A Worker Slot is bound to its current Session and exact Role/Model. `reuse` may target only that Slot's current Session. `fork` may explicitly branch from a parent Session recorded under another Slot in the same Project, but the Bridge verifies the parent's Project/Role/Model from Job history. The requested Role/Model must match the parent; if the destination Slot already exists, its Role/Model must also match. The forked child becomes the destination Slot's current Session.
 - If Role or Model changes, use `session_strategy="new"` or a different Worker Slot. Never use Reuse/Fork to pretend that a Session has switched models or permissions.
 - Prefer `reuse` for a continuous task with the same Slot/Role/Model. Use `new` for a new task direction or changed binding. Use `fork` only to branch a completed, non-busy Session while preserving its exact Role/Model context.
 - Do not call Session Inspect or cost prediction for every small task. Use Session Inspect for long-running work, suspected context bloat, or uncertain Slot health. Cost prediction is a heuristic aid, not a billing quote; call it only when the routing decision is genuinely unclear.
