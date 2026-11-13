@@ -47,7 +47,7 @@ Antigravity (Supervisor) autonomously manages worker sessions instead of fixing 
 3. `opencode_go_status(project_root, job_id)` — lightweight check for execution state and pending permissions.
 4. `opencode_go_result(project_root, job_id)` — retrieve assistant messages and message-level token usage. Idempotent and cached.
 5. `opencode_go_wait_result(project_root, job_id, timeout_seconds?, poll_interval?)` — wait inside Manager for completion or permission request, eliminating Supervisor polling loops.
-6. `opencode_go_list_jobs(project_root, limit?)` — list recent jobs for this Project only.
+6. `opencode_go_list_jobs(project_root, limit?, output_mode?)` — list recent jobs for this Project only. Defaults to `output_mode="summary"` (omits full `terminal_result`); use `"full"` only when the complete stored result is explicitly needed.
 7. `opencode_go_permissions(project_root, job_id)` — list pending permission requests.
 8. `opencode_go_permission_reply(project_root, job_id, request_id, decision)` — approve once or reject.
 9. `opencode_go_cancel(project_root, job_id)` — interrupt a worker with verified stop confirmation.
