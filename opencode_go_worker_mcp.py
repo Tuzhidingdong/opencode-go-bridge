@@ -38,7 +38,7 @@ Default hierarchy is Supervisor -> one Worker for each task. Default concurrency
 
 ## 3. Role and Session identity
 - `analyst` and `reviewer` are read-only (`explore`; edit/shell denied). `writer` and `reviser` use `build` with project-scoped edits and one-time shell approval. `general` requires approval for edits and shell. All roles deny nested subagents.
-- A Worker Slot is bound to its current Session and its exact Role and Model. `reuse` and `fork` inherit the parent Session configuration; therefore they are allowed only when the requested Role and Model exactly match that Slot binding.
+- A Worker Slot is bound to its current Session and exact Role/Model. `reuse` may target only that Slot's current Session. `fork` may explicitly branch from a parent Session recorded under another Slot in the same Project, but the Bridge must verify the parent's Project/Role/Model from Job history. The requested Role/Model must match the parent; if the destination Slot already exists, its Role/Model must also match. The forked child becomes the destination Slot's current Session.
 - If Role or Model changes, use `session_strategy="new"` or a different Worker Slot. Never use Reuse/Fork to pretend that a Session has switched models or permissions.
 - Prefer `reuse` for a continuous task with the same Slot/Role/Model. Use `new` for a new task direction or changed binding. Use `fork` only to branch a completed, non-busy Session while preserving its exact Role/Model context.
 - Do not call Session Inspect or cost prediction for every small task. Use Session Inspect for long-running work, suspected context bloat, or uncertain Slot health. Cost prediction is a heuristic aid, not a billing quote; call it only when the routing decision is genuinely unclear.
@@ -75,7 +75,7 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "创建一个独立 OpenCode Go Worker Session，并异步提交自然语言任务。每个 Worker 一个独立 Session。"
             "必须传入当前 Project 根目录、用户明确授权的 Role 与 Model。Inspect 为按需操作，不要求每个 Job 前重复调用；本工具会在创建 Session 前实时校验模型和所需 Agent。"
-            "Reuse/Fork 必须与 Worker Slot 已绑定的 Role/Model 完全一致，否则拒绝；更换 Role/Model 请使用 New 或不同 Slot。"
+            "Reuse 只能继续目标 Slot 当前 Session；Fork 可显式指定同一 Project 其他 Slot 的父 Session，但 Bridge 会用历史 Job 记录验证父 Session 的 Project/Role/Model，并检查目标 Slot（若已存在）的 Role/Model。Fork 子 Session 绑定到目标 Slot。Role/Model 不匹配时拒绝。"
             "role 可选 writer/reviewer/reviser/analyst/general。默认最多 3 个并发 Worker；只有用户明确要求增加并发时才允许 allow_over_limit=true，硬上限 6。"
             "project_root 必须是当前 Antigravity 活动 Project 根目录。Worker 禁止访问根目录外的文件、禁止嵌套 subagent；Reviewer/Analyst 禁止编辑且禁止 Shell；Writer/Reviser 的 Shell 操作逐项要求批准。"
             "返回 job_id 后使用 status/result 跟踪，不要重复提交同一任务。Antigravity 应自主规划角色与顺序，但服从用户明确指定。"
