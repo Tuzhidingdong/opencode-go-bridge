@@ -2659,11 +2659,36 @@ class OpenCodeClient:
             raise BridgeError(f"未找到基准 Manifest: {identifier}", category=ErrorCategory.APPLICATION_ERROR)
         return res
 
-    def list_jobs(self, raw_root: str, limit: int = 30) -> dict[str, Any]:
+    def list_jobs(
+        self,
+        raw_root: str,
+        limit: int = 30,
+        output_mode: str = "summary",
+    ) -> dict[str, Any]:
+        if not isinstance(output_mode, str) or output_mode.lower() not in ("summary", "full"):
+            raise BridgeError(
+                f"无效的 output_mode={output_mode!r}；支持的值为：summary、full。",
+                category=ErrorCategory.APPLICATION_ERROR,
+            )
+
+        normalized_mode = output_mode.lower()
         root = canonical_project_root(raw_root)
         bounded_limit = max(1, min(int(limit), 100))
         jobs = self.store.list(root, bounded_limit)
-        return {"project_root": root, "jobs": jobs, "count": len(jobs), "store_path": str(self.store.path)}
+
+        # terminal_result can contain the complete assistant response and token
+        # details. Keep routine Job listings compact; expose it only on request.
+        if normalized_mode == "summary":
+            for job in jobs:
+                job.pop("terminal_result", None)
+
+        return {
+            "project_root": root,
+            "jobs": jobs,
+            "count": len(jobs),
+            "store_path": str(self.store.path),
+            "output_mode": normalized_mode,
+        }
 
     def usage_report(self, period: str = "all", include_recent: bool = True) -> dict[str, Any]:
         valid_periods = ("all", "30d", "7d")
