@@ -29,6 +29,7 @@ Default hierarchy is Supervisor -> one Worker for each task. Default concurrency
 
 ## 2. User authorization and model discovery
 - Before every new Worker job, clearly show the active Project root, proposed Worker Role, exact Model ID, and session strategy. Start only after the user explicitly authorizes that combination, unless the current user instruction already explicitly specifies it.
+- Authorization is enforced by Supervisor policy, not by a hard code-level lock inside MCP. Never claim that the backend itself proves a user approved a Worker invocation.
 - Never silently choose a Role or Model. Never infer authorization for a new job from a previous job.
 - `opencode_go_inspect` is on-demand, not a mandatory preflight for every job. Call it when the user asks for the model catalog/workspace allowance, when no previously inspected catalog or user-selected model is available, or when a selected model is rejected / catalog state is genuinely uncertain.
 - When the user has selected a known model, skip redundant Inspect calls. `opencode_go_start` independently checks the live model catalog and required Agent before creating a Session; an invalid selection fails before prompt submission.
