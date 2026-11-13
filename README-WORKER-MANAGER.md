@@ -14,7 +14,7 @@ A local stdio MCP server for Antigravity. It orchestrates multiple independent O
 
 ## Adaptive Session Routing (自适应 Session 路由)
 
-**Worker Slot Binding:** Reuse is restricted to the current Session of its Slot. Fork may branch from a Session owned by another Slot in the same Project; the Manager verifies the parent Session's Project/Role/Model using Job history and rejects unknown, cross-project, or conflicting bindings. The requested Role/Model must match the parent, and any existing destination Slot must use the same Role/Model. The forked child becomes the destination Slot's current Session.
+**Worker Slot Binding:** Reuse is restricted to the current Session of its Slot. Fork may branch from a Session owned by another Slot in the same Project; the Manager verifies the parent Session's Project/Role/Model using Job history and rejects unknown, cross-project, or conflicting bindings. The requested Role/Model must match the parent, and any existing destination Slot must use the same Role/Model. The forked child becomes the destination Slot's current Session. If the OpenCode Fork API fails, the Manager returns an error instead of silently creating a fresh Session without the parent's context.
 
 **Inspect is on-demand:** Do not run a full model/allowance Inspect before every Job. Inspect when the user requests the catalog or allowance, when no current model selection basis exists, or when the selected model is rejected/uncertain. `opencode_go_start` performs its own live model and required-Agent validation before Session creation.
 
