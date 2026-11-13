@@ -20,7 +20,7 @@ SERVER_INSTRUCTIONS = """# OpenCode Go Worker Manager Instructions & Supervisor 
 
 You expose OpenCode Go as execution Workers under Antigravity supervision.
 Always pass the exact active Antigravity Project root as `project_root`; never guess or hardcode it. Workers must stay inside that root. External-directory access, path traversal, and nested subagents are denied.
-Default hierarchy is Supervisor -> one Worker for each task. Default concurrency is 3; hard maximum is 6. Do not create multi-worker chains or parallel workers unless the user explicitly requests them.
+Default hierarchy is Supervisor -> one Worker for each task. Default is exactly one Worker per task. Multiple concurrent Workers are permitted only when the user explicitly requests parallel workers; the backend hard maximum remains 6. Do not create multi-worker chains or parallel workers on your own initiative.
 
 ## 1. Task routing
 - Handle conversation, planning, simple questions, small edits, and lightweight read-only checks directly in Antigravity.
@@ -76,7 +76,7 @@ TOOLS: list[dict[str, Any]] = [
             "创建一个独立 OpenCode Go Worker Session，并异步提交自然语言任务。每个 Worker 一个独立 Session。"
             "必须传入当前 Project 根目录、用户明确授权的 Role 与 Model。Inspect 为按需操作，不要求每个 Job 前重复调用；本工具会在创建 Session 前实时校验模型和所需 Agent。"
             "Reuse 只能继续目标 Slot 当前 Session；Fork 可显式指定同一 Project 其他 Slot 的父 Session，但 Bridge 会用历史 Job 记录验证父 Session 的 Project/Role/Model，并检查目标 Slot（若已存在）的 Role/Model。Fork 子 Session 绑定到目标 Slot。Role/Model 不匹配时拒绝。"
-            "role 可选 writer/reviewer/reviser/analyst/general。默认最多 3 个并发 Worker；只有用户明确要求增加并发时才允许 allow_over_limit=true，硬上限 6。"
+            "role 可选 writer/reviewer/reviser/analyst/general。默认每个任务只使用一个 Worker；只有用户明确要求并行 Worker 时才允许增加并发，后端硬上限 6。"
             "project_root 必须是当前 Antigravity 活动 Project 根目录。Worker 禁止访问根目录外的文件、禁止嵌套 subagent；Reviewer/Analyst 禁止编辑且禁止 Shell；Writer/Reviser 的 Shell 操作逐项要求批准。"
             "返回 job_id 后使用 status/result 跟踪，不要重复提交同一任务。Antigravity 应自主规划角色与顺序，但服从用户明确指定。"
         ),
@@ -86,9 +86,9 @@ TOOLS: list[dict[str, Any]] = [
                 "project_root": {"type": "string", "description": "当前 Antigravity 活动 Project 的绝对根目录。"},
                 "role": {"type": "string", "enum": ["writer", "reviewer", "reviser", "analyst", "general"]},
                 "task": {"type": "string", "description": "Worker 的完整自然语言任务和验收标准。"},
-                "model_id": {"type": "string", "description": "用户从最近一次 inspect 返回的 opencode-go 模型中选择的 ID。可传短 ID 或 opencode-go/短 ID。"},
+                "model_id": {"type": "string", "description": "用户明确选择并授权的 opencode-go 模型 ID。可传短 ID 或 opencode-go/短 ID；Start 会在创建 Session 前实时验证模型，无需每个 Job 前 Inspect。"},
                 "title": {"type": "string", "description": "可选 Session 标题。"},
-                "allow_over_limit": {"type": "boolean", "default": False, "description": "只有用户明确要求超过默认 3 并发时才设 true；不能由 Agent 为方便自行开启。"},
+                "allow_over_limit": {"type": "boolean", "default": False, "description": "仅在用户明确要求并行 Worker 且超过后端默认并发限制时设 true；不能由 Agent 为方便自行开启。"},
                 "worker_slot": {"type": "string", "description": "长期逻辑角色槽位（如 Worker_A、Lead_Writer 等）；缺省默认为 role。"},
                 "session_strategy": {"type": "string", "enum": ["new", "reuse", "fork"], "default": "new", "description": "Session 路由策略：new(新建), reuse(复用当前槽位), fork(从已有会话分支)。"},
                 "session_id": {"type": "string", "description": "显式指定复用或 Fork 的目标 session_id（可选）。"},
