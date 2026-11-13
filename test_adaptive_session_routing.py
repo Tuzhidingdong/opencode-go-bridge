@@ -229,6 +229,11 @@ class AdaptiveSessionRoutingTests(unittest.TestCase):
             session_strategy="new",
         )
         sid1 = res1["session_id"]
+        # Simulate a completed parent Job before requesting Fork.
+        self.client.session_messages_map[sid1] = [{
+            "info": {"role": "assistant", "finish": "completed", "tokens": {"input": 120, "output": 30}},
+            "parts": [{"type": "text", "text": "Base formulation completed"}],
+        }]
         self.client.job_result(res1["job_id"], self.root1)
 
         # Anti forks to explore an alternative hypothesis
@@ -489,7 +494,7 @@ class AdaptiveSessionRoutingTests(unittest.TestCase):
         self.assertIn("on-demand", mcp.SERVER_INSTRUCTIONS.lower())
         self.assertIn("not by a hard code-level lock", mcp.SERVER_INSTRUCTIONS.lower())
         self.assertIn("not a mandatory preflight", mcp.SERVER_INSTRUCTIONS.lower())
-        self.assertIn("exact Role and Model", mcp.SERVER_INSTRUCTIONS)
+        self.assertIn("exact Role/Model", mcp.SERVER_INSTRUCTIONS)
         inspect_tool = next(t for t in mcp.TOOLS if t["name"] == "opencode_go_inspect")
         start_tool = next(t for t in mcp.TOOLS if t["name"] == "opencode_go_start")
         self.assertNotIn("每次新任务开始前先调用", inspect_tool["description"])
@@ -558,6 +563,34 @@ class AdaptiveSessionRoutingTests(unittest.TestCase):
         fork_count_after = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
         self.assertEqual(fork_count_after, fork_count_before)
 
+
+
+    # 17. Fork must reject a parent Session that still has an active Job.
+    def test_17_fork_rejects_busy_parent_session(self):
+        created = self.client.start_worker(
+            raw_root=self.root1,
+            role="writer",
+            worker_slot="Busy_Parent",
+            task="Keep the parent session active",
+            model_id="mimo-v2.6-flash",
+            session_strategy="new",
+        )
+        sid = created["session_id"]
+        fork_count_before = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
+
+        with self.assertRaisesRegex(core.BridgeError, "父 Session 正被 Job"):
+            self.client.start_worker(
+                raw_root=self.root1,
+                role="writer",
+                worker_slot="Busy_Parent_Branch",
+                session_id=sid,
+                task="Attempt to fork while the parent is still busy",
+                model_id="mimo-v2.6-flash",
+                session_strategy="fork",
+            )
+
+        fork_count_after = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
+        self.assertEqual(fork_count_after, fork_count_before)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
