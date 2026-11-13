@@ -130,7 +130,8 @@ These rules apply globally to all workspaces and projects.
 #### Worker Slot Binding Constraint (Worker Slot 绑定约束)
 
 - 一个 Worker Slot 对应一个当前 Session，并固定绑定该 Session 创建时的 **Role 与 Model**。
-- `reuse` 和 `fork` 都继承父 Session 的 Agent、Model 与权限，只有 Role 和 Model 与 Slot 绑定完全一致时才允许执行。
+- `reuse` 只能继续当前 Slot 绑定的 Session；`fork` 可以显式指定同一 Project 下其他 Slot 的父 Session，但 Bridge 必须从历史 Job 记录验证父 Session 的 Project、Role 和 Model。
+- Fork 的父 Session 必须已结束，且 Role/Model 必须与请求一致；若目标 Slot 已存在，其 Role/Model 也必须一致。Fork 后的子 Session 成为目标 Slot 的当前 Session。未知 Session、跨 Project Session、历史绑定冲突一律拒绝。
 - 需要更换 Role 或 Model 时，使用 `new` 或创建不同的 Worker Slot；禁止在同一 Slot 中假装切换模型或权限。
 - Session Inspect 与 Cost Prediction 是决策辅助，不是每个 Job 的必经步骤。只在长任务、上下文健康度不明或策略确实不确定时调用。
 
