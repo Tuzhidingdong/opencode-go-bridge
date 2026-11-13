@@ -24,6 +24,7 @@ class MockRoutingClient(core.OpenCodeClient):
         self.session_messages_map: dict[str, list[dict[str, Any]]] = {}
         self.session_permissions_map: dict[str, list[dict[str, Any]]] = {}
         self.fork_counter = 0
+        self.fail_fork = False
 
         if db_path:
             self.store.path = db_path
@@ -51,6 +52,7 @@ class MockRoutingClient(core.OpenCodeClient):
         if path.startswith("/api/model?"):
             return {"data": [
                 {"id": "mimo-v2.6-flash", "providerID": "opencode-go", "name": "MiMo Flash", "status": "active", "limit": {"context": 128000}},
+                {"id": "kimi-k3.1-pro", "providerID": "opencode-go", "name": "Kimi Pro", "status": "active", "limit": {"context": 256000}},
             ]}
         if path.startswith("/api/experimental/usage/limits?"):
             return {"data": {"workspace": {"name": "Test"}, "go": {"weekly": {"percent": 0}}, "budgets": []}}
@@ -85,6 +87,8 @@ class MockRoutingClient(core.OpenCodeClient):
             self.session_messages_map[sid] = []
             return {"data": {"id": sid}}
         if "/fork" in path:
+            if self.fail_fork:
+                raise RuntimeError("simulated OpenCode Fork API failure")
             self.fork_counter += 1
             sid = f"ses_forked_{self.fork_counter}_{uuid.uuid4().hex[:6]}"
             self.session_messages_map[sid] = []
@@ -228,6 +232,11 @@ class AdaptiveSessionRoutingTests(unittest.TestCase):
             session_strategy="new",
         )
         sid1 = res1["session_id"]
+        # Simulate a completed parent Job before requesting Fork.
+        self.client.session_messages_map[sid1] = [{
+            "info": {"role": "assistant", "finish": "completed", "tokens": {"input": 120, "output": 30}},
+            "parts": [{"type": "text", "text": "Base formulation completed"}],
+        }]
         self.client.job_result(res1["job_id"], self.root1)
 
         # Anti forks to explore an alternative hypothesis
@@ -421,6 +430,207 @@ class AdaptiveSessionRoutingTests(unittest.TestCase):
         actual_json = json.loads(updated_dec["actual_usage"])
         self.assertEqual(actual_json["input"], 620)
         self.assertEqual(actual_json["output"], 290)
+
+
+    # 12. Reuse must reject a model mismatch because the Session keeps its creation model.
+    def test_12_reuse_rejects_model_mismatch(self):
+        created = self.client.start_worker(
+            raw_root=self.root1,
+            role="writer",
+            worker_slot="Pinned_Writer",
+            task="Create the initial writer session",
+            model_id="mimo-v2.6-flash",
+            session_strategy="new",
+        )
+        sid = created["session_id"]
+        self.client.session_messages_map[sid] = [{
+            "info": {"role": "assistant", "finish": "completed", "tokens": {"input": 100, "output": 20}},
+            "parts": [{"type": "text", "text": "done"}],
+        }]
+        self.client.job_result(created["job_id"], self.root1)
+
+        prompt_count_before = sum(1 for _, path, _ in self.client.calls if path.endswith("/prompt"))
+        with self.assertRaisesRegex(core.BridgeError, "Slot.*已绑定"):
+            self.client.start_worker(
+                raw_root=self.root1,
+                role="writer",
+                worker_slot="Pinned_Writer",
+                task="Attempt to switch the reused session model",
+                model_id="kimi-k3.1-pro",
+                session_strategy="reuse",
+            )
+        prompt_count_after = sum(1 for _, path, _ in self.client.calls if path.endswith("/prompt"))
+        self.assertEqual(prompt_count_after, prompt_count_before)
+
+    # 13. Fork must reject a Role mismatch because it inherits parent Agent/permissions.
+    def test_13_fork_rejects_role_mismatch(self):
+        created = self.client.start_worker(
+            raw_root=self.root1,
+            role="writer",
+            worker_slot="Pinned_Fork",
+            task="Create the parent writer session",
+            model_id="mimo-v2.6-flash",
+            session_strategy="new",
+        )
+        sid = created["session_id"]
+        self.client.session_messages_map[sid] = [{
+            "info": {"role": "assistant", "finish": "completed", "tokens": {"input": 100, "output": 20}},
+            "parts": [{"type": "text", "text": "done"}],
+        }]
+        self.client.job_result(created["job_id"], self.root1)
+
+        fork_count_before = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
+        with self.assertRaisesRegex(core.BridgeError, "Slot.*已绑定"):
+            self.client.start_worker(
+                raw_root=self.root1,
+                role="reviewer",
+                worker_slot="Pinned_Fork",
+                task="Attempt to fork into a read-only reviewer session",
+                model_id="mimo-v2.6-flash",
+                session_strategy="fork",
+            )
+        fork_count_after = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
+        self.assertEqual(fork_count_after, fork_count_before)
+
+    # 14. MCP instructions must describe on-demand Inspect and the slot binding invariant.
+    def test_14_mcp_instructions_use_on_demand_inspect_and_slot_binding(self):
+        self.assertIn("on-demand", mcp.SERVER_INSTRUCTIONS.lower())
+        self.assertIn("not by a hard code-level lock", mcp.SERVER_INSTRUCTIONS.lower())
+        self.assertIn("not a mandatory preflight", mcp.SERVER_INSTRUCTIONS.lower())
+        self.assertIn("exact Role/Model", mcp.SERVER_INSTRUCTIONS)
+        inspect_tool = next(t for t in mcp.TOOLS if t["name"] == "opencode_go_inspect")
+        start_tool = next(t for t in mcp.TOOLS if t["name"] == "opencode_go_start")
+        self.assertNotIn("每次新任务开始前先调用", inspect_tool["description"])
+        self.assertNotIn("每次调用前必须已 inspect", start_tool["description"])
+
+    # 15. Cross-slot Fork must validate the source Session's persisted Model binding.
+    def test_15_cross_slot_fork_rejects_parent_model_mismatch(self):
+        created = self.client.start_worker(
+            raw_root=self.root1,
+            role="writer",
+            worker_slot="CrossSlot_Parent",
+            task="Create parent writer session",
+            model_id="mimo-v2.6-flash",
+            session_strategy="new",
+        )
+        sid = created["session_id"]
+        self.client.session_messages_map[sid] = [{
+            "info": {"role": "assistant", "finish": "completed", "tokens": {"input": 100, "output": 20}},
+            "parts": [{"type": "text", "text": "done"}],
+        }]
+        self.client.job_result(created["job_id"], self.root1)
+
+        fork_count_before = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
+        with self.assertRaisesRegex(core.BridgeError, "父 Session 已绑定"):
+            self.client.start_worker(
+                raw_root=self.root1,
+                role="writer",
+                worker_slot="CrossSlot_Invalid_Branch",
+                session_id=sid,
+                task="Attempt cross-slot fork with a different model",
+                model_id="kimi-k3.1-pro",
+                session_strategy="fork",
+            )
+        fork_count_after = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
+        self.assertEqual(fork_count_after, fork_count_before)
+
+
+    # 16. An explicit parent Session from another Project must never be forked here.
+    def test_16_cross_project_fork_rejects_foreign_parent(self):
+        created = self.client.start_worker(
+            raw_root=self.root1,
+            role="writer",
+            worker_slot="Foreign_Project_Parent",
+            task="Create parent session in project one",
+            model_id="mimo-v2.6-flash",
+            session_strategy="new",
+        )
+        sid = created["session_id"]
+        self.client.session_messages_map[sid] = [{
+            "info": {"role": "assistant", "finish": "completed", "tokens": {"input": 100, "output": 20}},
+            "parts": [{"type": "text", "text": "done"}],
+        }]
+        self.client.job_result(created["job_id"], self.root1)
+
+        fork_count_before = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
+        with self.assertRaisesRegex(core.BridgeError, "没有可验证的 Session 历史记录"):
+            self.client.start_worker(
+                raw_root=self.root2,
+                role="writer",
+                worker_slot="Foreign_Project_Branch",
+                session_id=sid,
+                task="Attempt to fork a session from another Project",
+                model_id="mimo-v2.6-flash",
+                session_strategy="fork",
+            )
+        fork_count_after = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
+        self.assertEqual(fork_count_after, fork_count_before)
+
+
+
+    # 17. Fork must reject a parent Session that still has an active Job.
+    def test_17_fork_rejects_busy_parent_session(self):
+        created = self.client.start_worker(
+            raw_root=self.root1,
+            role="writer",
+            worker_slot="Busy_Parent",
+            task="Keep the parent session active",
+            model_id="mimo-v2.6-flash",
+            session_strategy="new",
+        )
+        sid = created["session_id"]
+        fork_count_before = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
+
+        with self.assertRaisesRegex(core.BridgeError, "父 Session 正被 Job"):
+            self.client.start_worker(
+                raw_root=self.root1,
+                role="writer",
+                worker_slot="Busy_Parent_Branch",
+                session_id=sid,
+                task="Attempt to fork while the parent is still busy",
+                model_id="mimo-v2.6-flash",
+                session_strategy="fork",
+            )
+
+        fork_count_after = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
+        self.assertEqual(fork_count_after, fork_count_before)
+
+    # 18. Fork API failure must not silently create a fresh, context-free session
+    def test_18_fork_failure_does_not_fallback_to_new_session(self):
+        created = self.client.start_worker(
+            raw_root=self.root1,
+            role="writer",
+            worker_slot="Fork_Failure_Parent",
+            task="Create a parent session",
+            model_id="mimo-v2.6-flash",
+            session_strategy="new",
+        )
+        parent_sid = created["session_id"]
+        self.client.session_messages_map[parent_sid] = [{
+            "info": {"role": "assistant", "finish": "completed"},
+            "parts": [{"type": "text", "text": "Parent task completed"}],
+        }]
+        self.client.job_result(created["job_id"], self.root1)
+
+        self.client.fail_fork = True
+        before_new_sessions = sum(1 for _, path, _ in self.client.calls if path == "/api/session")
+        before_prompts = sum(1 for _, path, _ in self.client.calls if "/prompt" in path)
+
+        with self.assertRaisesRegex(RuntimeError, "simulated OpenCode Fork API failure"):
+            self.client.start_worker(
+                raw_root=self.root1,
+                role="writer",
+                worker_slot="Fork_Failure_Branch",
+                session_id=parent_sid,
+                task="Fork a branch without losing parent context",
+                model_id="mimo-v2.6-flash",
+                session_strategy="fork",
+            )
+
+        after_new_sessions = sum(1 for _, path, _ in self.client.calls if path == "/api/session")
+        after_prompts = sum(1 for _, path, _ in self.client.calls if "/prompt" in path)
+        self.assertEqual(after_new_sessions, before_new_sessions)
+        self.assertEqual(after_prompts, before_prompts)
 
 
 if __name__ == "__main__":

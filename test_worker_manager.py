@@ -159,6 +159,51 @@ class WorkerManagerTests(unittest.TestCase):
             }:
                 self.assertIn("project_root", tool["inputSchema"]["required"])
 
+    def test_mcp_list_jobs_dispatch_supports_summary_and_full_modes(self):
+        self.client.store.add({
+            "job_id": "job_list_modes",
+            "session_id": "ses_list_modes",
+            "project_root": self.root,
+            "role": "reviewer",
+            "model_id": "mimo-v2.6-flash",
+            "title": "List mode test",
+            "state": "completed",
+            "terminal_result": json.dumps({
+                "assistant_text": "large terminal result",
+                "usage_total_observed": {"input": 10, "output": 5},
+            }),
+        })
+
+        original_client = mcp.CLIENT
+        mcp.CLIENT = self.client
+        try:
+            summary = mcp.handle_tool(
+                "opencode_go_list_jobs",
+                {"project_root": self.root, "limit": 10, "output_mode": "summary"},
+            )
+            full = mcp.handle_tool(
+                "opencode_go_list_jobs",
+                {"project_root": self.root, "limit": 10, "output_mode": "full"},
+            )
+        finally:
+            mcp.CLIENT = original_client
+
+        self.assertFalse(summary["isError"])
+        self.assertFalse(full["isError"])
+        summary_data = summary["structuredContent"]
+        full_data = full["structuredContent"]
+        self.assertEqual(summary_data["output_mode"], "summary")
+        self.assertEqual(summary_data["count"], 1)
+        self.assertNotIn("terminal_result", summary_data["jobs"][0])
+        self.assertEqual(full_data["output_mode"], "full")
+        self.assertEqual(full_data["count"], 1)
+        self.assertIn("terminal_result", full_data["jobs"][0])
+        self.assertIn("large terminal result", full_data["jobs"][0]["terminal_result"])
+
+    def test_list_jobs_rejects_unknown_output_mode(self):
+        with self.assertRaises(core.BridgeError):
+            self.client.list_jobs(self.root, output_mode="verbose")
+
     def test_token_aggregation(self):
         messages = [
             {"info": {"role": "assistant", "tokens": {"input": 100, "output": 20, "reasoning": 4, "cache": {"read": 50, "write": 3}}, "cost": 0.001}, "parts": []},

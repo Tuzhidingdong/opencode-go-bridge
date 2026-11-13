@@ -14,6 +14,12 @@ A local stdio MCP server for Antigravity. It orchestrates multiple independent O
 
 ## Adaptive Session Routing (自适应 Session 路由)
 
+**Worker Slot Binding:** Reuse is restricted to the current Session of its Slot. Fork may branch from a Session owned by another Slot in the same Project; the Manager verifies the parent Session's Project/Role/Model using Job history and rejects unknown, cross-project, or conflicting bindings. The requested Role/Model must match the parent, and any existing destination Slot must use the same Role/Model. The forked child becomes the destination Slot's current Session. If the OpenCode Fork API fails, the Manager returns an error instead of silently creating a fresh Session without the parent's context.
+
+**Inspect is on-demand:** Do not run a full model/allowance Inspect before every Job. Inspect when the user requests the catalog or allowance, when no current model selection basis exists, or when the selected model is rejected/uncertain. `opencode_go_start` performs its own live model and required-Agent validation before Session creation.
+
+**Cost prediction is heuristic:** It estimates token/cache vectors and rework risk. It is a routing aid, not an exact provider bill. Use Session Inspect and prediction only when context health or strategy is genuinely uncertain.
+
 Antigravity (Supervisor) autonomously manages worker sessions instead of fixing sessions to always-new or always-reuse:
 
 1. **Job vs. Session vs. Worker Slot**:
@@ -41,7 +47,7 @@ Antigravity (Supervisor) autonomously manages worker sessions instead of fixing 
 3. `opencode_go_status(project_root, job_id)` — lightweight check for execution state and pending permissions.
 4. `opencode_go_result(project_root, job_id)` — retrieve assistant messages and message-level token usage. Idempotent and cached.
 5. `opencode_go_wait_result(project_root, job_id, timeout_seconds?, poll_interval?)` — wait inside Manager for completion or permission request, eliminating Supervisor polling loops.
-6. `opencode_go_list_jobs(project_root, limit?)` — list recent jobs for this Project only.
+6. `opencode_go_list_jobs(project_root, limit?, output_mode?)` — list recent jobs for this Project only. Defaults to `output_mode="summary"` (omits full `terminal_result`); use `"full"` only when the complete stored result is explicitly needed.
 7. `opencode_go_permissions(project_root, job_id)` — list pending permission requests.
 8. `opencode_go_permission_reply(project_root, job_id, request_id, decision)` — approve once or reject.
 9. `opencode_go_cancel(project_root, job_id)` — interrupt a worker with verified stop confirmation.
