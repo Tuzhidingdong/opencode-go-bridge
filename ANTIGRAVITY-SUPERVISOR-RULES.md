@@ -71,7 +71,7 @@ Before invoking any Worker, the Supervisor must first evaluate:
 
 3. **策略选择**：同一 Slot、相同 Role/Model 且任务连续时优先 `reuse`；更换 Role/Model 或切换方向时使用 `new`/不同 Slot；需要隔离分支且父 Session 已结束时使用 `fork`。
 
-4. **Slot 绑定**：一个 Slot 固定对应当前 Session 的 Role 和 Model。Reuse/Fork 必须与绑定完全一致，否则 Bridge 拒绝；禁止跨模型或跨权限复用。
+4. **Slot 绑定**：Reuse 只能继续当前 Slot 的 Session。Fork 可从同一 Project 的其他 Slot 显式指定父 Session，但 Bridge 必须用历史 Job 记录核验父 Session 的 Project、Role、Model；历史记录缺失/冲突、跨 Project 或 Role/Model 不匹配时拒绝。目标 Slot 若已存在，也必须与父 Session Role/Model 一致；Fork 子 Session 会写入目标 Slot。
 
 5. **长效研究记忆**：仅在阶段性结论形成时调用 `opencode_go_update_session_summary`，保存核心结论、证据和文件引用，不保存冗长对话记录。
 
