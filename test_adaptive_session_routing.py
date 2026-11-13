@@ -527,5 +527,37 @@ class AdaptiveSessionRoutingTests(unittest.TestCase):
         self.assertEqual(fork_count_after, fork_count_before)
 
 
+    # 16. An explicit parent Session from another Project must never be forked here.
+    def test_16_cross_project_fork_rejects_foreign_parent(self):
+        created = self.client.start_worker(
+            raw_root=self.root1,
+            role="writer",
+            worker_slot="Foreign_Project_Parent",
+            task="Create parent session in project one",
+            model_id="mimo-v2.6-flash",
+            session_strategy="new",
+        )
+        sid = created["session_id"]
+        self.client.session_messages_map[sid] = [{
+            "info": {"role": "assistant", "finish": "completed", "tokens": {"input": 100, "output": 20}},
+            "parts": [{"type": "text", "text": "done"}],
+        }]
+        self.client.job_result(created["job_id"], self.root1)
+
+        fork_count_before = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
+        with self.assertRaisesRegex(core.BridgeError, "没有可验证的 Session 历史记录"):
+            self.client.start_worker(
+                raw_root=self.root2,
+                role="writer",
+                worker_slot="Foreign_Project_Branch",
+                session_id=sid,
+                task="Attempt to fork a session from another Project",
+                model_id="mimo-v2.6-flash",
+                session_strategy="fork",
+            )
+        fork_count_after = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
+        self.assertEqual(fork_count_after, fork_count_before)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
