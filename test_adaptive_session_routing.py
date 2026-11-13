@@ -24,6 +24,7 @@ class MockRoutingClient(core.OpenCodeClient):
         self.session_messages_map: dict[str, list[dict[str, Any]]] = {}
         self.session_permissions_map: dict[str, list[dict[str, Any]]] = {}
         self.fork_counter = 0
+        self.fail_fork = False
 
         if db_path:
             self.store.path = db_path
@@ -86,6 +87,8 @@ class MockRoutingClient(core.OpenCodeClient):
             self.session_messages_map[sid] = []
             return {"data": {"id": sid}}
         if "/fork" in path:
+            if self.fail_fork:
+                raise RuntimeError("simulated OpenCode Fork API failure")
             self.fork_counter += 1
             sid = f"ses_forked_{self.fork_counter}_{uuid.uuid4().hex[:6]}"
             self.session_messages_map[sid] = []
@@ -591,6 +594,44 @@ class AdaptiveSessionRoutingTests(unittest.TestCase):
 
         fork_count_after = sum(1 for _, path, _ in self.client.calls if "/fork" in path)
         self.assertEqual(fork_count_after, fork_count_before)
+
+    # 18. Fork API failure must not silently create a fresh, context-free session
+    def test_18_fork_failure_does_not_fallback_to_new_session(self):
+        created = self.client.start_worker(
+            raw_root=self.root1,
+            role="writer",
+            worker_slot="Fork_Failure_Parent",
+            task="Create a parent session",
+            model_id="mimo-v2.6-flash",
+            session_strategy="new",
+        )
+        parent_sid = created["session_id"]
+        self.client.session_messages_map[parent_sid] = [{
+            "info": {"role": "assistant", "finish": "completed"},
+            "parts": [{"type": "text", "text": "Parent task completed"}],
+        }]
+        self.client.job_result(created["job_id"], self.root1)
+
+        self.client.fail_fork = True
+        before_new_sessions = sum(1 for _, path, _ in self.client.calls if path == "/api/session")
+        before_prompts = sum(1 for _, path, _ in self.client.calls if "/prompt" in path)
+
+        with self.assertRaisesRegex(RuntimeError, "simulated OpenCode Fork API failure"):
+            self.client.start_worker(
+                raw_root=self.root1,
+                role="writer",
+                worker_slot="Fork_Failure_Branch",
+                session_id=parent_sid,
+                task="Fork a branch without losing parent context",
+                model_id="mimo-v2.6-flash",
+                session_strategy="fork",
+            )
+
+        after_new_sessions = sum(1 for _, path, _ in self.client.calls if path == "/api/session")
+        after_prompts = sum(1 for _, path, _ in self.client.calls if "/prompt" in path)
+        self.assertEqual(after_new_sessions, before_new_sessions)
+        self.assertEqual(after_prompts, before_prompts)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
