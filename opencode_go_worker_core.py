@@ -1975,7 +1975,7 @@ class OpenCodeClient:
                     )
                 if not parent_binding.get("consistent", False):
                     raise BridgeError(
-                        f"拒绝对 Session {selected_parent_sid!r} 执行 {strategy}："
+                        f"拒绝对 Worker Slot {slot!r} 的 Session {selected_parent_sid!r} 执行 {strategy}："
                         "历史 Job 记录中的 Role/Model 绑定不一致，无法安全验证。",
                         category=ErrorCategory.APPLICATION_ERROR,
                     )
@@ -1984,7 +1984,7 @@ class OpenCodeClient:
                 bound_model = parent_binding["model_id"]
                 if bound_role != role or bound_model != model_id:
                     raise BridgeError(
-                        f"拒绝对 Session {selected_parent_sid!r} 执行 {strategy}："
+                        f"拒绝对 Worker Slot {slot!r} 的 Session {selected_parent_sid!r} 执行 {strategy}："
                         f"父 Session 已绑定 role={bound_role!r}, model_id={bound_model!r}，"
                         f"本次请求为 role={role!r}, model_id={model_id!r}。"
                         "Reuse/Fork 会继承原 Session 的 Agent、模型和权限；"
