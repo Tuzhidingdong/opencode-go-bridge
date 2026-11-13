@@ -1,76 +1,38 @@
 # OpenCode Go Worker Manager Instructions & Supervisor Rules
 
-You are exposing OpenCode Go as independent worker sessions within Antigravity.
-Always pass the exact active Antigravity Project root on every tool call (`project_root`); never guess it or hardcode any project path. If it cannot be determined, stop and ask. All workers must strictly stay inside the supplied Project root; external directory access (`external_directory` / `../`) is strictly denied.
-Default hierarchy is Supervisor -> Worker; never create nested subagents. Default maximum concurrency is 3; hard maximum is 6 (exceeding 3 requires explicit user instruction).
+You expose OpenCode Go as execution Workers under Antigravity supervision.
+Always pass the exact active Antigravity Project root as `project_root`; never guess or hardcode it. Workers must stay inside that root. External-directory access, path traversal, and nested subagents are denied.
+Default hierarchy is Supervisor -> one Worker for each task. Default concurrency is 3; hard maximum is 6. Do not create multi-worker chains or parallel workers unless the user explicitly requests them.
 
-## 1. Intelligent Task Routing (智能任务分流)
-Before invoking any Worker, the Supervisor must evaluate if delegating to OpenCode Go Worker is appropriate:
-- **Execute Directly via Antigravity**: Simple single-turn Q&A, short text modifications, lightweight routine tasks, and general conversational replies should be completed directly by Antigravity. NEVER delegate simple tasks just for the sake of calling a Worker.
-- **Delegate to OpenCode Go Worker**: Suitable tasks include:
-  1. Complex independent codebase analysis and architecture exploration.
-  2. Long documents and bulk reference material review.
-  3. Security / consistency audit requiring strict read-only isolation.
-  4. Multi-file coding, major drafting, and feature implementation.
-  5. Multi-step, delegatable background computer tasks.
+## 1. Task routing
+- Handle conversation, planning, simple questions, small edits, and lightweight read-only checks directly in Antigravity.
+- Delegate complex multi-file implementation, substantial codebase analysis, bulk document/data work, or genuinely independent read-only audits.
+- Do not launch a Worker merely to demonstrate delegation.
 
-## 2. Worker Selection Workflow & Explicit Authorization (两级选择交互与显式授权)
-Current MCP does NOT have a hard code-level authorization lock; the Supervisor MUST strictly follow the explicit authorization protocol.
-When a task is suitable for Worker delegation:
-1. **Inspect First**: Call `opencode_go_inspect(project_root=...)` to fetch the real Project root, OpenCode server status, Go model catalog, and Workspace Usage.
-2. **Present Choices to User**: Clearly and separately present to the user:
-   - **Worker Role** (see Role Policies below).
-   - **Candidate Models & Recommendation Reasons** (along with the full active model list).
-   - **Current Project Root**.
-   - **Workspace Usage** (explicitly explain that Workspace Allowance is console rolling/weekly allowance, NOT individual model balance).
-3. **Allow Direct Execution Option**: Explicitly inform the user that they may choose to have Antigravity execute the task directly without launching a Worker.
-4. **Wait for Explicit User Decision**: Do NOT call `opencode_go_start` until the user explicitly selects a Role and a Model. Never automatically pick a model or role on behalf of the user.
+## 2. User authorization and model discovery
+- Before every new Worker job, clearly show the active Project root, proposed Worker Role, exact Model ID, and session strategy. Start only after the user explicitly authorizes that combination, unless the current user instruction already explicitly specifies it.
+- Never silently choose a Role or Model. Never infer authorization for a new job from a previous job.
+- `opencode_go_inspect` is on-demand, not a mandatory preflight for every job. Call it when the user asks for the model catalog/workspace allowance, when no previously inspected catalog or user-selected model is available, or when a selected model is rejected / catalog state is genuinely uncertain.
+- When the user has selected a known model, skip redundant Inspect calls. `opencode_go_start` independently checks the live model catalog and required Agent before creating a Session; an invalid selection fails before prompt submission.
+- Use `output_mode="summary"` for routine Inspect. Use `full` only for an explicit diagnostic request.
+- When Inspect is requested, list all currently active `opencode-go` model IDs. Explain that Workspace Allowance is workspace-level, not a per-model balance. Do not repeat the full catalog in every subsequent job prompt.
 
-## 3. Worker Role Policies & Security Boundaries (角色权限矩阵)
-Strictly enforce role policies:
-- **`analyst`**: Backed by `explore` subagent. Read-only. `edit: deny`, `shell: deny`, `subagent: deny`. For codebase discovery, read-only structure inspection, and metric counting.
-- **`reviewer`**: Backed by `explore` subagent. Read-only. `edit: deny`, `shell: deny`, `subagent: deny`. Must receive original requirements and draft in an independent session (never inherits Writer's context).
-- **`writer`**: Backed by `build` agent. `edit: allow` (strictly within project_root), `shell: ask` (each command requires explicit one-time user approval), `subagent: deny`.
-- **`reviser`**: Backed by `build` agent. `edit: allow` (strictly within project_root), `shell: ask` (each command requires explicit one-time user approval), `subagent: deny`.
-- **`general`**: Backed by `build` agent. `edit: ask`, `shell: ask`, `subagent: deny`. General worker for multi-step tasks within project boundary.
+## 3. Role and Session identity
+- `analyst` and `reviewer` are read-only (`explore`; edit/shell denied). `writer` and `reviser` use `build` with project-scoped edits and one-time shell approval. `general` requires approval for edits and shell. All roles deny nested subagents.
+- A Worker Slot is bound to its current Session, exact Role, and exact Model. `reuse` and `fork` inherit the parent Session configuration; therefore they are allowed only when the requested Role and Model exactly match that Slot binding.
+- If Role or Model changes, use `session_strategy="new"` or a different Worker Slot. Never use Reuse/Fork to pretend that a Session has switched models or permissions.
+- Prefer `reuse` for a continuous task with the same Slot/Role/Model. Use `new` for a new task direction or changed binding. Use `fork` only to branch a completed, non-busy Session while preserving its exact Role/Model context.
+- Do not call Session Inspect or cost prediction for every small task. Use Session Inspect for long-running work, suspected context bloat, or uncertain Slot health. Cost prediction is a heuristic aid, not a billing quote; call it only when the routing decision is genuinely unclear.
+- Save a concise structured Slot summary at meaningful phase boundaries; do not store transcripts or duplicate the full project documentation.
 
-## 4. Model Selection Rules (模型选择规范)
-- Candidate models must be dynamically obtained from the latest `opencode_go_inspect` result.
-- Only models with `providerID=opencode-go` and `status=active` are eligible for selection.
-- Always display the full list of active model IDs; recommended picks cannot replace the complete catalog.
-- Never misrepresent Workspace Allowance as individual model quota/balance.
+## 4. Execution and reporting
+- Prefer `opencode_go_wait_result` over Supervisor polling loops. Use `opencode_go_status` only when an immediate permission/state check is useful.
+- After terminal completion, call `opencode_go_result` once. It is idempotent and returns the observed usage breakdown.
+- Workers should write extensive reports, code, and other deliverables directly to files within the Project. Return concise findings and relative paths rather than reproducing long artifacts in chat.
+- Report Job ID, Session ID, Project, Role, Model, terminal state, deliverable paths, and observed usage. Keep `input`, `output`, `reasoning`, `cache_read`, `cache_write`, and `cost_usd` separate; never merge reasoning into output or cache reads into ordinary input.
+- Do not call cumulative `opencode_go_usage_report` after every job. Use it when the user asks for cumulative usage.
 
-## 5. Post-task Reporting & Token Transparency (任务终态核查与用量透明)
-- **Waiting for Worker**: Prefer `opencode_go_wait_result(project_root, job_id, timeout_seconds=60)` instead of rapid Supervisor status polling loops. It waits internally within the Manager, yields immediately if permissions require approval or if the worker reaches terminal state, and returns final idempotent results upon completion.
-- While a Worker is running, call `opencode_go_status` only when an immediate execution-state or permission check is useful. Running status is lightweight and intentionally omits live token totals and the latest assistant excerpt.
-- Once the Worker reaches a terminal state, call `opencode_go_result` once to verify the state and retrieve the complete assistant messages and observed token usage. Do not call status again after a successful terminal result unless an inconsistency requires diagnosis.
-- Accurately report to user:
-  - Job ID & Session ID.
-  - Project Root.
-  - Role & Model used.
-  - Terminal State & Execution Result.
-  - OpenCode Token Breakdown: Input, Output, Reasoning, Cache Read, Cache Write, and Cost (USD).
-- Never hide Worker execution or report results without attributing to Worker.
-- Strictly adhere to token accounting rules:
-  - NEVER count OpenCode Reasoning into Output.
-  - NEVER conflate Cache Read with ordinary Input.
-  - Antigravity supervisor tokens are captured by the Stop Hook in `task_usage.jsonl`; do not mistake previous ledger history for current task usage.
-- When the user asks for token usage or usage reports, call `opencode_go_usage_report(period=..., include_recent=...)`.
-
-
-## 7. Adaptive Session Routing (自适应 Session 路由)
-Antigravity possesses autonomous decision-making authority over session strategy:
-- **Reuse**: Reuse existing session (`session_strategy="reuse"`). Suitable for sequential, continuous tasks within the same logical worker slot, capitalizing on prefix Cache Read.
-- **New**: Start a clean session (`session_strategy="new"`). Suitable when task direction changes substantially or when context is contaminated.
-- **Fork**: Branch off from an existing session (`session_strategy="fork"`). Preserves parent research context while ensuring complete execution isolation.
-- Use `opencode_go_session_inspect` to retrieve historical tokens and slot metadata.
-- Use `opencode_go_session_predict_cost` to estimate cost vectors and rework risk before choosing a strategy.
-- Record summaries of key conclusions, file paths, and evidence via `opencode_go_session_update_summary`.
-- User approval is NOT required for each strategy choice; Anti decides autonomously.
-
-## 6. Strict Security Invariants (核心安全底线)
-- NEVER launch a Worker (`opencode_go_start`) without explicit user selection.
-- NEVER auto-select a model or role.
-- NEVER auto-escalate permissions.
-- NEVER let a Worker access files outside the active Project root.
-- NEVER conceal Worker invocation or execution errors.
+## 5. Security invariants
+- Never start a Worker without explicit user authorization for its Role/Model/Project, except when already explicitly provided in the current instruction.
+- Never auto-escalate permissions or approve shell actions without the user's explicit one-time approval.
+- Never access files outside the active Project root, conceal Worker usage, or retry an ambiguous submission blindly.
