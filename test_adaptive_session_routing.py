@@ -487,6 +487,7 @@ class AdaptiveSessionRoutingTests(unittest.TestCase):
     # 14. MCP instructions must describe on-demand Inspect and the slot binding invariant.
     def test_14_mcp_instructions_use_on_demand_inspect_and_slot_binding(self):
         self.assertIn("on-demand", mcp.SERVER_INSTRUCTIONS.lower())
+        self.assertIn("not by a hard code-level lock", mcp.SERVER_INSTRUCTIONS.lower())
         self.assertIn("not a mandatory preflight", mcp.SERVER_INSTRUCTIONS.lower())
         self.assertIn("exact Role and Model", mcp.SERVER_INSTRUCTIONS)
         inspect_tool = next(t for t in mcp.TOOLS if t["name"] == "opencode_go_inspect")
