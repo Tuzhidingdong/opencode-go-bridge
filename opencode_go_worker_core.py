@@ -1969,7 +1969,7 @@ class OpenCodeClient:
                 parent_binding = self.store.get_session_binding(root, selected_parent_sid)
                 if not parent_binding:
                     raise BridgeError(
-                        f"拒绝对 Session {selected_parent_sid!r} 执行 {strategy}："
+                        f"拒绝对 Worker Slot {slot!r} 的 Session {selected_parent_sid!r} 执行 {strategy}："
                         "当前 Project 中没有可验证的 Session 历史记录。",
                         category=ErrorCategory.APPLICATION_ERROR,
                     )
